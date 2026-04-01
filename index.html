@@ -206,10 +206,6 @@
             letter-spacing: 2px;
         }
         
-        .status-value.attack-mode {
-            color: #ff0050;
-        }
-        
         /* Ship Selector HUD */
         .ship-hud {
             position: fixed;
@@ -278,6 +274,16 @@
             position: absolute;
             pointer-events: none;
             z-index: 40;
+            display: none;
+        }
+        
+        /* Box Selection */
+        .selection-box {
+            position: fixed;
+            border: 1px solid rgba(68, 170, 255, 0.8);
+            background: rgba(68, 170, 255, 0.1);
+            pointer-events: none;
+            z-index: 45;
             display: none;
         }
         
@@ -451,6 +457,8 @@
         <div class="selection-ring"></div>
     </div>
     
+    <div class="selection-box" id="selection-box"></div>
+    
     <div class="target-marker" id="target-marker">
         <div class="target-cross"></div>
     </div>
@@ -460,7 +468,6 @@
         // Game State
         let scene, camera, renderer;
         let asteroids = [];
-        let commandMode = 'move';
         let raycaster = new THREE.Raycaster();
         let mouse = new THREE.Vector2();
         let starField;
@@ -468,6 +475,14 @@
         // Ship data
         let spaceships = [];
         let selectedShipIndex = -1;
+        let selectedObject = null;
+        let selectedObjects = [];  // Multi-selection array
+        let controlGroups = {};    // 1-9 control groups
+        
+        // Box selection state
+        let isBoxSelecting = false;
+        let boxStart = { x: 0, y: 0 };
+        let boxEnd = { x: 0, y: 0 };
         const MAX_FUEL = 100;
         const ACCELERATION_FUEL_COST = 0.08;  // Fuel per acceleration
         const DECELERATION_FUEL_COST = 0.05;  // Fuel per braking
@@ -555,6 +570,10 @@
             
             // Create environment
             createStarField();
+            
+            // Global list of occupied positions to prevent overlaps
+            window.occupiedPositions = [];
+            
             createSpaceships();
             createAsteroids();
             createBoundarySphere();
@@ -1011,16 +1030,31 @@
             };
         }
         
+        // Check if a position overlaps with any occupied position
+        function isPositionFree(pos, radius) {
+            for (const occ of window.occupiedPositions) {
+                const dist = pos.distanceTo(occ.pos);
+                if (dist < radius + occ.radius) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        
+        function registerPosition(pos, radius) {
+            window.occupiedPositions.push({ pos: pos.clone(), radius: radius });
+        }
+        
         function createSpaceships() {
-            const shipCount = 50;
+            const shipCount = 15;
             
             // 3D spherical shell formation
             let shipIndex = 0;
             
             const shells = [
                 { radius: 0, count: 1 },
-                { radius: 15, count: 12 },
-                { radius: 30, count: 37 }
+                { radius: 15, count: 6 },
+                { radius: 30, count: 8 }
             ];
             
             for (const shell of shells) {
@@ -1057,6 +1091,9 @@
                     
                     const ship = createSingleSpaceship(config, shipIndex);
                     ship.position.set(config.x, config.y, config.z);
+                    
+                    // Register position to prevent asteroid overlap
+                    registerPosition(new THREE.Vector3(config.x, config.y, config.z), 3);
                     
                     // Face outward from center
                     if (shell.radius > 0) {
@@ -1336,9 +1373,9 @@
             ];
             
             navLights.forEach(nl => {
-                const nlGeometry = new THREE.SphereGeometry(0.08 * s, 6, 6);
+                const nlGeometry = new THREE.SphereGeometry(0.25 * s, 6, 6);
                 const nlMaterial = new THREE.MeshBasicMaterial({
-                    color: nl.color, transparent: true, opacity: 0.9
+                    color: nl.color, transparent: true, opacity: 1.0
                 });
                 const nlMesh = new THREE.Mesh(nlGeometry, nlMaterial);
                 nlMesh.position.set(nl.pos[0], nl.pos[1], nl.pos[2]);
@@ -1463,17 +1500,26 @@
                 
                 const asteroid = new THREE.Mesh(geometry, material);
                 
-                // Random position - proper 3D spherical distribution
-                const distance = 30 + Math.random() * 400;
-                // Use spherical coordinates for true 3D distribution
-                const theta = Math.random() * Math.PI * 2;  // Around Y axis
-                const phi = Math.acos(2 * Math.random() - 1);  // From -1 to 1 (full sphere)
+                // Random position - retry until no overlap
+                let asteroidPos;
+                let attempts = 0;
+                const maxAttempts = 30;
+                let distance, theta, phi;
                 
-                asteroid.position.set(
-                    distance * Math.sin(phi) * Math.cos(theta),
-                    distance * Math.cos(phi) * 0.8,  // Slightly flattened but not planar
-                    distance * Math.sin(phi) * Math.sin(theta)
-                );
+                do {
+                    distance = 30 + Math.random() * 400;
+                    theta = Math.random() * Math.PI * 2;
+                    phi = Math.acos(2 * Math.random() - 1);
+                    
+                    asteroidPos = new THREE.Vector3(
+                        distance * Math.sin(phi) * Math.cos(theta),
+                        distance * Math.cos(phi) * 0.8,
+                        distance * Math.sin(phi) * Math.sin(theta)
+                    );
+                    attempts++;
+                } while (!isPositionFree(asteroidPos, 15) && attempts < maxAttempts);
+                
+                asteroid.position.copy(asteroidPos);
                 
                 // Gaussian distribution for scale (mean = 2.8, stdDev = 0.8)
                 // This makes most asteroids bigger (2-4 range) with some smaller outliers
@@ -1528,6 +1574,9 @@
                 
                 asteroids.push(asteroid);
                 scene.add(asteroid);
+                
+                // Register asteroid position to prevent future overlaps
+                registerPosition(asteroidPos, scale * 1.5);
             }
         }
         
@@ -1562,22 +1611,19 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
         
-        let shiftPressed = false;
+        // Keyboard state
         
         function onKeyDown(event) {
             const key = event.key.toLowerCase();
             const code = event.code;
             
-            if (key === 'shift') {
-                shiftPressed = true;
-                if (commandMode !== 'attack') {
-                    setMode('attack');
-                }
+            // Prevent default for Tab and Space immediately
+            if (code === 'Tab' || code === 'Space' || key === ' ') {
+                event.preventDefault();
             }
             
             if (code === 'Space' || key === ' ' || key === 'spacebar') {
                 keys.space = true;
-                event.preventDefault();
             }
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = true;
@@ -1598,10 +1644,9 @@
                 
                 if (timeSinceLastPress < DOUBLE_TAP_THRESHOLD) {
                     // Double-tap detected - zoom in very close (6 units)
-                    focusOnSelectedShip(true);
+                    focusOnSelected(true);
                 } else {
-                    // Single tap - normal focus (12 units)
-                    focusOnSelectedShip(false);
+                    focusOnSelected(false);
                 }
                 
                 lastLPressTime = now;
@@ -1615,10 +1660,9 @@
                 keys.x = true;
             }
             
-            // TAB to cycle through ships
+            // TAB to cycle through objects, SHIFT+TAB to cycle back
             if (code === 'Tab') {
-                event.preventDefault();
-                cycleShip();
+                cycleSelection(event.shiftKey ? -1 : 1);
             }
         }
         
@@ -1639,28 +1683,30 @@
             }
         }
         
-        function cycleShip() {
-            if (spaceships.length === 0) return;
+        function cycleSelection(direction = 1) {
+            const allObjects = [...spaceships, ...asteroids];
+            if (allObjects.length === 0) return;
             
-            let nextIndex;
-            if (selectedShipIndex < 0) {
-                nextIndex = 0;
-            } else {
-                nextIndex = (selectedShipIndex + 1) % spaceships.length;
+            let currentIndex = -1;
+            if (selectedObject) {
+                currentIndex = allObjects.indexOf(selectedObject);
             }
-            selectShip(nextIndex);
+            
+            // Wrap around: end -> beginning, beginning -> end
+            const nextIndex = ((currentIndex + direction) % allObjects.length + allObjects.length) % allObjects.length;
+            const next = allObjects[nextIndex];
+            
+            // Clear previous selection, then add new one
+            deselectAll();
+            addToSelection(next);
+            
+            // Look at the newly selected object
+            focusOnSelected(false);
         }
         
         function onKeyUp(event) {
             const key = event.key.toLowerCase();
             const code = event.code;
-            
-            if (key === 'shift') {
-                shiftPressed = false;
-                if (commandMode === 'attack') {
-                    setMode('move');
-                }
-            }
             
             if (code === 'Space' || key === ' ' || key === 'spacebar') {
                 keys.space = false;
@@ -1682,40 +1728,165 @@
             dragStart.x = event.clientX;
             dragStart.y = event.clientY;
             
-            // Update mouse coordinates
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            // Start box selection tracking
+            boxStart.x = event.clientX;
+            boxStart.y = event.clientY;
+            isBoxSelecting = false;  // Will become true if mouse moves enough
+        }
+        
+        function onMouseUp(event) {
+            if (event.button !== 0) {
+                isDragging = false;
+                return;
+            }
             
-            // Raycast
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(scene.children, true);
+            const box = document.getElementById('selection-box');
             
-            let clickedObject = null;
-            for (let intersect of intersects) {
-                let obj = intersect.object;
-                while (obj.parent && obj.parent !== scene) {
+            if (isBoxSelecting) {
+                // Finish box selection
+                box.style.display = 'none';
+                
+                // Get box bounds in screen coords
+                const left = Math.min(boxStart.x, boxEnd.x);
+                const right = Math.max(boxStart.x, boxEnd.x);
+                const top = Math.min(boxStart.y, boxEnd.y);
+                const bottom = Math.max(boxStart.y, boxEnd.y);
+                
+                // Find all objects inside the box
+                if (!event.shiftKey) deselectAll();
+                
+                const allSelectable = [...spaceships, ...asteroids];
+                allSelectable.forEach(obj => {
+                    const screenPos = obj.position.clone().project(camera);
+                    const sx = (screenPos.x * 0.5 + 0.5) * window.innerWidth;
+                    const sy = (-screenPos.y * 0.5 + 0.5) * window.innerHeight;
+                    
+                    // Check if object is in front of camera and inside box
+                    if (screenPos.z < 1 && sx >= left && sx <= right && sy >= top && sy <= bottom) {
+                        addToSelection(obj);
+                    }
+                });
+                
+                isBoxSelecting = false;
+            } else {
+                // Regular click (no drag) - do raycast selection
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(scene.children, true);
+                
+                let clickedObject = null;
+                for (let intersect of intersects) {
+                    let obj = intersect.object;
+                    while (obj.parent && obj.parent !== scene) {
+                        if (obj.userData.selectable) {
+                            clickedObject = obj;
+                            break;
+                        }
+                        obj = obj.parent;
+                    }
                     if (obj.userData.selectable) {
                         clickedObject = obj;
-                        break;
                     }
-                    obj = obj.parent;
+                    if (clickedObject) break;
                 }
-                if (obj.userData.selectable) {
-                    clickedObject = obj;
+                
+                if (clickedObject) {
+                    if (event.shiftKey) {
+                        // Shift+click: toggle in selection
+                        toggleInSelection(clickedObject);
+                    } else {
+                        // Normal click: select only this
+                        deselectAll();
+                        addToSelection(clickedObject);
+                    }
+                } else {
+                    deselectAll();
                 }
-                if (clickedObject) break;
             }
             
-            if (clickedObject) {
-                if (clickedObject.userData.type === 'spaceship') {
-                    selectShip(clickedObject.userData.shipIndex);
-                } else if (clickedObject.userData.type === 'asteroid') {
-                    // Clicked asteroid but didn't right-click - just ignore
+            isDragging = false;
+        }
+        
+        function addToSelection(obj) {
+            if (selectedObjects.includes(obj)) return;
+            selectedObjects.push(obj);
+            
+            // Set primary selection to last added
+            selectedObject = obj;
+            if (obj.userData.type === 'spaceship') {
+                selectedShipIndex = obj.userData.shipIndex;
+            }
+            
+            // Show selection ring
+            if (obj.userData.type === 'spaceship') {
+                const ring = obj.getObjectByName('selectionRing');
+                if (ring) ring.material.opacity = 0.8;
+            } else if (obj.userData.type === 'asteroid') {
+                // Add ring if not already there
+                if (!obj.getObjectByName('selectionRing')) {
+                    obj.geometry.computeBoundingSphere();
+                    const geoRadius = obj.geometry.boundingSphere.radius;
+                    const ringGeometry = new THREE.TorusGeometry(geoRadius * 1.3, geoRadius * 0.03, 8, 32);
+                    const ringMaterial = new THREE.MeshBasicMaterial({
+                        color: 0x44aaff, transparent: true, opacity: 0.8
+                    });
+                    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                    ring.rotation.x = Math.PI / 2;
+                    ring.name = 'selectionRing';
+                    obj.add(ring);
+                }
+                if (obj.material) {
+                    obj.userData.origEmissiveIntensity = obj.material.emissiveIntensity;
+                    obj.material.emissiveIntensity = 0.5;
+                }
+            }
+            
+            updateSelectionIndicator();
+            updateFuelDisplay();
+        }
+        
+        function toggleInSelection(obj) {
+            const idx = selectedObjects.indexOf(obj);
+            if (idx >= 0) {
+                // Remove from selection
+                removeFromSelection(obj);
+            } else {
+                addToSelection(obj);
+            }
+        }
+        
+        function removeFromSelection(obj) {
+            const idx = selectedObjects.indexOf(obj);
+            if (idx < 0) return;
+            selectedObjects.splice(idx, 1);
+            
+            // Hide selection ring
+            if (obj.userData.type === 'spaceship') {
+                const ring = obj.getObjectByName('selectionRing');
+                if (ring) ring.material.opacity = 0;
+            } else if (obj.userData.type === 'asteroid') {
+                const ring = obj.getObjectByName('selectionRing');
+                if (ring) obj.remove(ring);
+                if (obj.material) {
+                    obj.material.emissiveIntensity = obj.userData.origEmissiveIntensity || 0.1;
+                }
+            }
+            
+            // Update primary selection
+            if (selectedObjects.length > 0) {
+                selectedObject = selectedObjects[selectedObjects.length - 1];
+                if (selectedObject.userData.type === 'spaceship') {
+                    selectedShipIndex = selectedObject.userData.shipIndex;
                 }
             } else {
-                // Clicked on empty space - deselect current ship
-                deselectAll();
+                selectedObject = null;
+                selectedShipIndex = -1;
             }
+            
+            updateSelectionIndicator();
+            updateFuelDisplay();
         }
         
         function onRightClick(event) {
@@ -1751,22 +1922,13 @@
                     const planeIntersects = raycaster.intersectObject(createInvisiblePlane());
                     if (planeIntersects.length > 0) {
                         const point = planeIntersects[0].point;
-                        if (commandMode === 'attack') {
-                            showTargetMarker(point, 'attack');
-                        } else {
-                            moveShipTo(point);
-                            showTargetMarker(point, 'move');
-                        }
+                        moveShipTo(point);
+                        showTargetMarker(point, 'move');
                     }
                 }
             } else if (clickedObject.userData.type === 'asteroid' && selectedShipIndex >= 0) {
-                // Right-clicked on asteroid - attack!
-                if (commandMode === 'attack') {
-                    fireLaser(clickedObject);
-                } else {
-                    // Even in move mode, right-click on asteroid attacks
-                    fireLaser(clickedObject);
-                }
+                // Right-clicked on asteroid - attack
+                fireLaser(clickedObject);
             }
         }
         
@@ -1784,33 +1946,48 @@
             if (isDragging) {
                 const deltaX = event.clientX - dragStart.x;
                 const deltaY = event.clientY - dragStart.y;
+                const dragDist = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
                 
-                const rotateSpeed = 0.005;
-                const offset = new THREE.Vector3().subVectors(cameraPosition, cameraTarget);
-                
-                // Horizontal: rotate around camera's up vector (tracked, no gimbal lock)
-                offset.applyAxisAngle(cameraUpVector, -deltaX * rotateSpeed);
-                
-                // Vertical: rotate around binormal (perpendicular to offset and up)
-                const binormal = new THREE.Vector3().crossVectors(offset, cameraUpVector).normalize();
-                if (binormal.length() > 0.001) {
-                    offset.applyAxisAngle(binormal, -deltaY * rotateSpeed);
-                    cameraUpVector.applyAxisAngle(binormal, -deltaY * rotateSpeed);
+                // If dragged more than 5px without middle button, start box select
+                if (dragDist > 5 && !isBoxSelecting && !event.buttons === 4) {
+                    // Check if we're clicking on empty space (not on an object)
+                    // Only start box select if not orbiting (middle mouse or right mouse)
+                    isBoxSelecting = true;
                 }
                 
-                cameraPosition.copy(cameraTarget).add(offset);
-                updateCameraPosition();
-                
-                dragStart.x = event.clientX;
-                dragStart.y = event.clientY;
+                if (isBoxSelecting) {
+                    // Draw selection box
+                    boxEnd.x = event.clientX;
+                    boxEnd.y = event.clientY;
+                    
+                    const box = document.getElementById('selection-box');
+                    box.style.display = 'block';
+                    box.style.left = Math.min(boxStart.x, boxEnd.x) + 'px';
+                    box.style.top = Math.min(boxStart.y, boxEnd.y) + 'px';
+                    box.style.width = Math.abs(boxEnd.x - boxStart.x) + 'px';
+                    box.style.height = Math.abs(boxEnd.y - boxStart.y) + 'px';
+                } else {
+                    // Camera orbit
+                    const rotateSpeed = 0.005;
+                    const offset = new THREE.Vector3().subVectors(cameraPosition, cameraTarget);
+                    
+                    offset.applyAxisAngle(cameraUpVector, -deltaX * rotateSpeed);
+                    
+                    const binormal = new THREE.Vector3().crossVectors(offset, cameraUpVector).normalize();
+                    if (binormal.length() > 0.001) {
+                        offset.applyAxisAngle(binormal, -deltaY * rotateSpeed);
+                        cameraUpVector.applyAxisAngle(binormal, -deltaY * rotateSpeed);
+                    }
+                    
+                    cameraPosition.copy(cameraTarget).add(offset);
+                    updateCameraPosition();
+                    
+                    dragStart.x = event.clientX;
+                    dragStart.y = event.clientY;
+                }
             }
             
-            // Update UI positions for selection indicator
             updateSelectionIndicator();
-        }
-        
-        function onMouseUp() {
-            isDragging = false;
         }
         
         function onWheel(event) {
@@ -1848,47 +2025,31 @@
         
         function selectShip(index) {
             deselectAll();
-            selectedShipIndex = index;
-            
-            const ship = spaceships[index];
-            if (ship) {
-                // Show selection ring
-                const ring = ship.getObjectByName('selectionRing');
-                if (ring) {
-                    ring.material.opacity = 0.8;
-                }
-                
-                // Update UI
-                updateSelectionIndicator();
-                updateFuelDisplay();
-            }
+            addToSelection(spaceships[index]);
         }
         
-        function focusOnSelectedShip(zoomed = false) {
-            if (selectedShipIndex < 0 || !spaceships[selectedShipIndex]) return;
+        function selectAsteroid(asteroid) {
+            deselectAll();
+            addToSelection(asteroid);
+        }
+        
+        function focusOnSelected(zoomed = false) {
+            if (!selectedObject) return;
             
-            const ship = spaceships[selectedShipIndex];
-            const shipPos = ship.position.clone();
+            const targetPos = selectedObject.position.clone();
             
-            // Zoom distance depends on whether double-tapped
-            const offsetDistance = zoomed ? 6 : 12;  // Very close on double-tap
-            const offsetHeight = zoomed ? 4 : 8;     // Lower on double-tap
+            if (zoomed) {
+                const dirToObj = new THREE.Vector3().subVectors(cameraPosition, targetPos).normalize();
+                const closeDistance = selectedObject.userData.type === 'asteroid' ? 
+                    Math.max(10, selectedObject.scale.x * 3) : 8;
+                
+                targetCameraPosition.copy(targetPos).add(dirToObj.multiplyScalar(closeDistance));
+                targetCameraTarget.copy(targetPos);
+            } else {
+                targetCameraPosition.copy(cameraPosition);
+                targetCameraTarget.copy(targetPos);
+            }
             
-            // Get ship's forward direction
-            const shipForward = new THREE.Vector3(0, 0, 1).applyAxisAngle(
-                new THREE.Vector3(0, 1, 0), 
-                ship.rotation.y
-            );
-            
-            // Position camera behind and above the ship
-            const cameraOffset = shipForward.clone().multiplyScalar(-offsetDistance);
-            cameraOffset.y = offsetHeight;
-            
-            // Set target positions (not immediate)
-            targetCameraPosition.copy(shipPos).add(cameraOffset);
-            targetCameraTarget.copy(shipPos);
-            
-            // Start smooth transition
             isCameraTransitioning = true;
         }
         
@@ -1904,7 +2065,6 @@
             const targetDiff = cameraTarget.distanceTo(targetCameraTarget);
             
             if (posDiff < 0.1 && targetDiff < 0.1) {
-                // Snap to final position and stop
                 cameraPosition.copy(targetCameraPosition);
                 cameraTarget.copy(targetCameraTarget);
                 isCameraTransitioning = false;
@@ -1914,7 +2074,7 @@
         }
         
         function deselectAll() {
-            // Hide all selection rings
+            // Hide all ship selection rings
             spaceships.forEach(ship => {
                 const ring = ship.getObjectByName('selectionRing');
                 if (ring) {
@@ -1922,23 +2082,42 @@
                 }
             });
             
+            // Remove asteroid selection rings and restore emissive
+            selectedObjects.forEach(obj => {
+                if (obj.userData.type === 'asteroid') {
+                    const ring = obj.getObjectByName('selectionRing');
+                    if (ring) obj.remove(ring);
+                    if (obj.material) {
+                        obj.material.emissiveIntensity = obj.userData.origEmissiveIntensity || 0.1;
+                    }
+                }
+            });
+            
             selectedShipIndex = -1;
+            selectedObject = null;
+            selectedObjects = [];
             document.getElementById('selection-indicator').style.display = 'none';
         }
         
         function updateSelectionIndicator() {
-            if (selectedShipIndex >= 0 && spaceships[selectedShipIndex]) {
-                const ship = spaceships[selectedShipIndex];
-                const indicator = document.getElementById('selection-indicator');
-                const vector = ship.position.clone();
+            const indicator = document.getElementById('selection-indicator');
+            if (selectedObject) {
+                const vector = selectedObject.position.clone();
                 vector.project(camera);
                 
-                const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
-                const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
-                
-                indicator.style.display = 'block';
-                indicator.style.left = (x - 30) + 'px';
-                indicator.style.top = (y - 30) + 'px';
+                // Only show if in front of camera
+                if (vector.z < 1) {
+                    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                    const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+                    
+                    indicator.style.display = 'block';
+                    indicator.style.left = (x - 30) + 'px';
+                    indicator.style.top = (y - 30) + 'px';
+                } else {
+                    indicator.style.display = 'none';
+                }
+            } else {
+                indicator.style.display = 'none';
             }
         }
         
@@ -2037,20 +2216,6 @@
             
             // Update HUD to show weapons depletion
             updateShipHUD();
-        }
-        
-        function setMode(mode) {
-            commandMode = mode;
-            const moveBtn = document.getElementById('move-btn');
-            const attackBtn = document.getElementById('attack-btn');
-            const modeDisplay = document.getElementById('mode-display');
-            
-            if (moveBtn) moveBtn.classList.toggle('active', mode === 'move');
-            if (attackBtn) attackBtn.classList.toggle('active', mode === 'attack');
-            if (modeDisplay) {
-                modeDisplay.textContent = mode === 'move' ? 'TACTICAL' : 'ATTACK';
-                modeDisplay.classList.toggle('attack-mode', mode === 'attack');
-            }
         }
         
         function updateSpaceships() {
@@ -2192,12 +2357,23 @@
         
         function updateFuelDisplay() {
             const display = document.getElementById('mode-display');
-            if (selectedShipIndex >= 0 && spaceships[selectedShipIndex]) {
+            if (!selectedObject) {
+                display.innerHTML = 'NO SELECTION';
+                return;
+            }
+            
+            if (selectedObject.userData.type === 'spaceship' && selectedShipIndex >= 0) {
                 const ship = spaceships[selectedShipIndex];
                 const fuel = Math.round(ship.userData.fuel);
                 const weapons = Math.round(ship.userData.weapons);
                 const name = ship.userData.name;
                 display.innerHTML = `${name} <span style="color:${fuel > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuel}%</span> <span style="color:${weapons > 20 ? '#ffaa00' : '#ff0000'}">WPN:${weapons}%</span>`;
+            } else if (selectedObject.userData.type === 'asteroid') {
+                const shape = selectedObject.userData.shapeType < 0.15 ? 'Potato' : 
+                              selectedObject.userData.shapeType < 0.30 ? 'Elongated' :
+                              selectedObject.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
+                const size = Math.round((selectedObject.scale.x + selectedObject.scale.y + selectedObject.scale.z) / 3);
+                display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | Size:${size}</span>`;
             }
         }
         
