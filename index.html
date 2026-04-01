@@ -1676,14 +1676,20 @@
             const allObjects = [...spaceships, ...asteroids];
             if (allObjects.length === 0) return;
             
+            // Sort by distance to camera
+            const sorted = allObjects
+                .map(obj => ({ obj, dist: obj.position.distanceTo(cameraPosition) }))
+                .sort((a, b) => a.dist - b.dist);
+            
+            // Find current object in sorted list
             let currentIndex = -1;
             if (selectedObject) {
-                currentIndex = allObjects.indexOf(selectedObject);
+                currentIndex = sorted.findIndex(s => s.obj === selectedObject);
             }
             
-            // Wrap around: end -> beginning, beginning -> end
-            const nextIndex = ((currentIndex + direction) % allObjects.length + allObjects.length) % allObjects.length;
-            const next = allObjects[nextIndex];
+            // Next/prev in proximity order
+            const nextIndex = ((currentIndex + direction) % sorted.length + sorted.length) % sorted.length;
+            const next = sorted[nextIndex].obj;
             
             // Clear previous selection, then add new one
             deselectAll();
