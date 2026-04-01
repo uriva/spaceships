@@ -472,12 +472,19 @@
         let isBoxSelecting = false;
         let boxStart = { x: 0, y: 0 };
         let boxEnd = { x: 0, y: 0 };
-        const MAX_FUEL = 100;
-        const ACCELERATION_FUEL_COST = 0.08;  // Fuel per acceleration
-        const DECELERATION_FUEL_COST = 0.05;  // Fuel per braking
-        const MAX_SPEED = 0.5;
-        const ACCELERATION = 0.015;
-        const DECELERATION = 0.008;  // Friction when no input
+        
+        // Scale: 1 game unit = 10 km
+        const KM_PER_UNIT = 10;
+        
+        // Ship physics (corvette-class, ~200m, 50,000 tonnes)
+        const MAX_FUEL = 500;               // 500 tonnes of propellant
+        const ACCELERATION_FUEL_COST = 0.4; // tonnes per burn frame
+        const DECELERATION_FUEL_COST = 0.25;// tonnes per brake frame
+        const MAX_SPEED = 0.5;              // 0.5 units/frame = ~5 km/s
+        const ACCELERATION = 0.015;         // ~0.15 km/s² (2 MN thrust on 50kt)
+        const DECELERATION = 0.008;         // passive drag
+        const SHIP_MASS = 50000;            // tonnes
+        const WEAPON_CHARGES = 100;         // laser capacitor charges
         
         // Ship movement
         let targetPosition = null;
@@ -1388,8 +1395,9 @@
                 shipIndex: index,
                 fuel: MAX_FUEL,
                 maxFuel: MAX_FUEL,
-                weapons: 100,
-                maxWeapons: 100,
+                mass: SHIP_MASS,
+                weapons: WEAPON_CHARGES,
+                maxWeapons: WEAPON_CHARGES,
                 velocity: new THREE.Vector3(0, 0, 0),
                 targetVelocity: new THREE.Vector3(0, 0, 0),
                 isAccelerating: false,
@@ -2381,6 +2389,12 @@
             updateFuelDisplay();
         }
         
+        function formatDist(units) {
+            const km = Math.round(units * KM_PER_UNIT);
+            if (km >= 10000) return (km / 1000).toFixed(1) + 'Kkm';
+            return km + 'km';
+        }
+        
         function updateFuelDisplay() {
             const display = document.getElementById('mode-display');
             if (selectedObjects.length === 0) {
@@ -2390,22 +2404,24 @@
             
             if (selectedObjects.length === 1) {
                 const obj = selectedObjects[0];
-                const dist = Math.round(obj.position.distanceTo(cameraPosition));
+                const dist = formatDist(obj.position.distanceTo(cameraPosition));
                 
                 if (obj.userData.type === 'spaceship') {
-                    const fuel = Math.round(obj.userData.fuel);
-                    const weapons = Math.round(obj.userData.weapons);
-                    display.innerHTML = `${obj.userData.name} <span style="color:${fuel > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuel}%</span> <span style="color:${weapons > 20 ? '#ffaa00' : '#ff0000'}">WPN:${weapons}%</span> <span style="color:#888">DST:${dist}km</span>`;
+                    const fuelPct = Math.round(obj.userData.fuel / obj.userData.maxFuel * 100);
+                    const fuelT = Math.round(obj.userData.fuel);
+                    const wpnPct = Math.round(obj.userData.weapons / obj.userData.maxWeapons * 100);
+                    const speed = Math.round(obj.userData.velocity.length() * KM_PER_UNIT * 60);  // km/s (assuming 60fps)
+                    display.innerHTML = `${obj.userData.name} <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
                 } else if (obj.userData.type === 'asteroid') {
                     const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
                                   obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
-                    const size = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3);
-                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | Size:${size}</span> <span style="color:#888">DST:${dist}km</span>`;
+                    const sizeKm = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3 * KM_PER_UNIT);
+                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | ~${sizeKm}km</span> <span style="color:#888">${dist}</span>`;
                 }
             } else {
                 // Multiple objects selected - show avg distance
-                const avgDist = Math.round(selectedObjects.reduce((sum, o) => sum + o.position.distanceTo(cameraPosition), 0) / selectedObjects.length);
+                const avgDist = formatDist(selectedObjects.reduce((sum, o) => sum + o.position.distanceTo(cameraPosition), 0) / selectedObjects.length);
                 
                 const ships = selectedObjects.filter(o => o.userData.type === 'spaceship');
                 const asteroidCount = selectedObjects.filter(o => o.userData.type === 'asteroid').length;
@@ -2422,7 +2438,7 @@
                     parts.push(`${asteroidCount} Asteroid${asteroidCount > 1 ? 's' : ''}`);
                 }
                 
-                display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')} <span style="color:#888">AVG DST:${avgDist}km</span>`;
+                display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')} <span style="color:#888">AVG ${avgDist}</span>`;
             }
         }
         
