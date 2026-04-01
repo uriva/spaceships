@@ -1987,7 +1987,7 @@
         }
         
         function onWheel(event) {
-            // Zoom by moving camera forward/backward along view direction
+            isCameraTransitioning = false;  // Cancel any L transition
             const zoomSpeed = 0.1;
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
             const zoomAmount = event.deltaY * zoomSpeed;
@@ -2515,6 +2515,10 @@
         }
         
         function updateKeyboardControls() {
+            // Any WASD/ZX input cancels camera transition
+            if (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x) {
+                isCameraTransitioning = false;
+            }
             
             if (keys.space) {
                 // SPHERE WALKING with tracked up vector
