@@ -2400,40 +2400,6 @@
                 display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')} <span style="color:#888">AVG DST:${avgDist}</span>`;
             }
         }
-            
-            if (selectedObjects.length === 1) {
-                const obj = selectedObjects[0];
-                if (obj.userData.type === 'spaceship') {
-                    const fuel = Math.round(obj.userData.fuel);
-                    const weapons = Math.round(obj.userData.weapons);
-                    display.innerHTML = `${obj.userData.name} <span style="color:${fuel > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuel}%</span> <span style="color:${weapons > 20 ? '#ffaa00' : '#ff0000'}">WPN:${weapons}%</span>`;
-                } else if (obj.userData.type === 'asteroid') {
-                    const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
-                                  obj.userData.shapeType < 0.30 ? 'Elongated' :
-                                  obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
-                    const size = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3);
-                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | Size:${size}</span>`;
-                }
-            } else {
-                // Multiple objects selected
-                const ships = selectedObjects.filter(o => o.userData.type === 'spaceship');
-                const asteroidCount = selectedObjects.filter(o => o.userData.type === 'asteroid').length;
-                
-                let parts = [];
-                if (ships.length > 0) {
-                    if (ships.length <= 4) {
-                        parts.push(ships.map(s => s.userData.name).join(', '));
-                    } else {
-                        parts.push(`${ships.length} Ships`);
-                    }
-                }
-                if (asteroidCount > 0) {
-                    parts.push(`${asteroidCount} Asteroid${asteroidCount > 1 ? 's' : ''}`);
-                }
-                
-                display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')}`;
-            }
-        }
         
         function updateShipHUD() {
             // Update ship dots
