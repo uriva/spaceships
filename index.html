@@ -1986,16 +1986,16 @@
                 );
                 
                 if (keys.space) {
-                    // Space held: camera orbit
+                    // Space held: camera orbit - "pull the background" feel
                     const rotateSpeed = 0.005;
                     const offset = new THREE.Vector3().subVectors(cameraPosition, cameraTarget);
                     
-                    offset.applyAxisAngle(cameraUpVector, -deltaX * rotateSpeed);
+                    offset.applyAxisAngle(cameraUpVector, deltaX * rotateSpeed);
                     
                     const binormal = new THREE.Vector3().crossVectors(offset, cameraUpVector).normalize();
                     if (binormal.length() > 0.001) {
-                        offset.applyAxisAngle(binormal, -deltaY * rotateSpeed);
-                        cameraUpVector.applyAxisAngle(binormal, -deltaY * rotateSpeed);
+                        offset.applyAxisAngle(binormal, deltaY * rotateSpeed);
+                        cameraUpVector.applyAxisAngle(binormal, deltaY * rotateSpeed);
                     }
                     
                     cameraPosition.copy(cameraTarget).add(offset);
