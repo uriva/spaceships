@@ -2003,7 +2003,8 @@
         }
         
         function applySmoothZoom() {
-            // Only apply when Z/X zoom is active (keys held or still lerping)
+            // Only apply when Z/X keys are actively held
+            if (!keys.z && !keys.x) return;
             if (Math.abs(targetCameraDistance - currentCameraDistance) < 0.01) return;
             
             // Lerp current distance toward target
