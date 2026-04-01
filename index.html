@@ -473,8 +473,11 @@
         let boxStart = { x: 0, y: 0 };
         let boxEnd = { x: 0, y: 0 };
         
-        // Scale: 1 game unit = 10 km
-        const KM_PER_UNIT = 10;
+        // Scale: 1 game unit = 0.1 km (100m)
+        // Ship (~3 units long) = ~300m - close to corvette scale
+        // Formation spread (~30 units) = ~3 km
+        // Engagement sphere (500 units) = ~50 km
+        const KM_PER_UNIT = 0.1;
         
         // Ship physics (corvette-class, ~200m, 50,000 tonnes)
         const MAX_FUEL = 500;               // 500 tonnes of propellant
