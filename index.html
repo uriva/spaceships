@@ -2589,10 +2589,13 @@
             updateLasers();
             updateStarField();
             updateBoundarySphere();
-            updateSelectionIndicator();
             updateShipHUD();
             
             renderer.render(scene, camera);
+            
+            // Update 2D indicator AFTER render so camera matrix is final
+            camera.updateMatrixWorld();
+            updateSelectionIndicator();
         }
         
         // Initialize
