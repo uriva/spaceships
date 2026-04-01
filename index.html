@@ -1728,10 +1728,15 @@
             dragStart.x = event.clientX;
             dragStart.y = event.clientY;
             
-            // Start box selection tracking
-            boxStart.x = event.clientX;
-            boxStart.y = event.clientY;
-            isBoxSelecting = false;  // Will become true if mouse moves enough
+            if (keys.space) {
+                // Space held: camera pan mode
+                isBoxSelecting = false;
+            } else {
+                // Default: selection mode
+                boxStart.x = event.clientX;
+                boxStart.y = event.clientY;
+                isBoxSelecting = false;  // Will become true if mouse moves enough
+            }
         }
         
         function onMouseUp(event) {
@@ -1946,28 +1951,13 @@
             if (isDragging) {
                 const deltaX = event.clientX - dragStart.x;
                 const deltaY = event.clientY - dragStart.y;
-                const dragDist = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+                const dragDist = Math.sqrt(
+                    (event.clientX - boxStart.x) * (event.clientX - boxStart.x) +
+                    (event.clientY - boxStart.y) * (event.clientY - boxStart.y)
+                );
                 
-                // If dragged more than 5px without middle button, start box select
-                if (dragDist > 5 && !isBoxSelecting && !event.buttons === 4) {
-                    // Check if we're clicking on empty space (not on an object)
-                    // Only start box select if not orbiting (middle mouse or right mouse)
-                    isBoxSelecting = true;
-                }
-                
-                if (isBoxSelecting) {
-                    // Draw selection box
-                    boxEnd.x = event.clientX;
-                    boxEnd.y = event.clientY;
-                    
-                    const box = document.getElementById('selection-box');
-                    box.style.display = 'block';
-                    box.style.left = Math.min(boxStart.x, boxEnd.x) + 'px';
-                    box.style.top = Math.min(boxStart.y, boxEnd.y) + 'px';
-                    box.style.width = Math.abs(boxEnd.x - boxStart.x) + 'px';
-                    box.style.height = Math.abs(boxEnd.y - boxStart.y) + 'px';
-                } else {
-                    // Camera orbit
+                if (keys.space) {
+                    // Space held: camera orbit
                     const rotateSpeed = 0.005;
                     const offset = new THREE.Vector3().subVectors(cameraPosition, cameraTarget);
                     
@@ -1984,6 +1974,23 @@
                     
                     dragStart.x = event.clientX;
                     dragStart.y = event.clientY;
+                } else {
+                    // Default: box selection
+                    if (dragDist > 5 && !isBoxSelecting) {
+                        isBoxSelecting = true;
+                    }
+                    
+                    if (isBoxSelecting) {
+                        boxEnd.x = event.clientX;
+                        boxEnd.y = event.clientY;
+                        
+                        const box = document.getElementById('selection-box');
+                        box.style.display = 'block';
+                        box.style.left = Math.min(boxStart.x, boxEnd.x) + 'px';
+                        box.style.top = Math.min(boxStart.y, boxEnd.y) + 'px';
+                        box.style.width = Math.abs(boxEnd.x - boxStart.x) + 'px';
+                        box.style.height = Math.abs(boxEnd.y - boxStart.y) + 'px';
+                    }
                 }
             }
             
