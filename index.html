@@ -1474,17 +1474,42 @@
                     geometry = geometries[Math.floor(Math.random() * geometries.length)];
                 }
                 
-                const asteroidColor = new THREE.Color(
-                        0.3 + Math.random() * 0.2,
-                        0.25 + Math.random() * 0.2,
-                        0.35 + Math.random() * 0.2
-                    );
+                // Realistic asteroid colors - based on spectral types
+                // C-type (carbonaceous): dark gray/charcoal - most common ~75%
+                // S-type (silicaceous): brownish/olive - ~17%
+                // M-type (metallic): silver/iron gray - ~8%
+                const asteroidType = Math.random();
+                let baseR, baseG, baseB, metalness;
+                
+                if (asteroidType < 0.75) {
+                    // C-type: dark carbonaceous (charcoal, dark brown-gray)
+                    const shade = 0.08 + Math.random() * 0.12;
+                    baseR = shade + Math.random() * 0.03;
+                    baseG = shade + Math.random() * 0.02;
+                    baseB = shade + Math.random() * 0.02;
+                    metalness = 0.05;
+                } else if (asteroidType < 0.92) {
+                    // S-type: silicaceous (olive, tan, brownish)
+                    baseR = 0.25 + Math.random() * 0.15;
+                    baseG = 0.2 + Math.random() * 0.1;
+                    baseB = 0.12 + Math.random() * 0.08;
+                    metalness = 0.15;
+                } else {
+                    // M-type: metallic (iron gray, slight silver sheen)
+                    const shade = 0.25 + Math.random() * 0.15;
+                    baseR = shade;
+                    baseG = shade;
+                    baseB = shade + Math.random() * 0.03;
+                    metalness = 0.6;
+                }
+                
+                const asteroidColor = new THREE.Color(baseR, baseG, baseB);
                 const material = new THREE.MeshStandardMaterial({
                     color: asteroidColor,
                     emissive: asteroidColor,
                     emissiveIntensity: 0.1,
-                    roughness: 0.9,
-                    metalness: 0.1
+                    roughness: 0.85 + Math.random() * 0.15,
+                    metalness: metalness
                 });
                 
                 const asteroid = new THREE.Mesh(geometry, material);
