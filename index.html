@@ -501,7 +501,7 @@
         let targetCameraPosition = new THREE.Vector3(40, 30, 40);
         let targetCameraTarget = new THREE.Vector3(0, 0, 0);
         let isCameraTransitioning = false;
-        const CAMERA_LERP_SPEED = 0.12;
+        const CAMERA_LERP_SPEED = 0.04;
         let isDragging = false;
         let dragStart = { x: 0, y: 0 };
         let cameraDistance = 60;
@@ -2364,23 +2364,42 @@
         
         function updateFuelDisplay() {
             const display = document.getElementById('mode-display');
-            if (!selectedObject) {
+            if (selectedObjects.length === 0) {
                 display.innerHTML = 'NO SELECTION';
                 return;
             }
             
-            if (selectedObject.userData.type === 'spaceship' && selectedShipIndex >= 0) {
-                const ship = spaceships[selectedShipIndex];
-                const fuel = Math.round(ship.userData.fuel);
-                const weapons = Math.round(ship.userData.weapons);
-                const name = ship.userData.name;
-                display.innerHTML = `${name} <span style="color:${fuel > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuel}%</span> <span style="color:${weapons > 20 ? '#ffaa00' : '#ff0000'}">WPN:${weapons}%</span>`;
-            } else if (selectedObject.userData.type === 'asteroid') {
-                const shape = selectedObject.userData.shapeType < 0.15 ? 'Potato' : 
-                              selectedObject.userData.shapeType < 0.30 ? 'Elongated' :
-                              selectedObject.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
-                const size = Math.round((selectedObject.scale.x + selectedObject.scale.y + selectedObject.scale.z) / 3);
-                display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | Size:${size}</span>`;
+            if (selectedObjects.length === 1) {
+                const obj = selectedObjects[0];
+                if (obj.userData.type === 'spaceship') {
+                    const fuel = Math.round(obj.userData.fuel);
+                    const weapons = Math.round(obj.userData.weapons);
+                    display.innerHTML = `${obj.userData.name} <span style="color:${fuel > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuel}%</span> <span style="color:${weapons > 20 ? '#ffaa00' : '#ff0000'}">WPN:${weapons}%</span>`;
+                } else if (obj.userData.type === 'asteroid') {
+                    const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
+                                  obj.userData.shapeType < 0.30 ? 'Elongated' :
+                                  obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
+                    const size = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3);
+                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | Size:${size}</span>`;
+                }
+            } else {
+                // Multiple objects selected
+                const ships = selectedObjects.filter(o => o.userData.type === 'spaceship');
+                const asteroidCount = selectedObjects.filter(o => o.userData.type === 'asteroid').length;
+                
+                let parts = [];
+                if (ships.length > 0) {
+                    if (ships.length <= 4) {
+                        parts.push(ships.map(s => s.userData.name).join(', '));
+                    } else {
+                        parts.push(`${ships.length} Ships`);
+                    }
+                }
+                if (asteroidCount > 0) {
+                    parts.push(`${asteroidCount} Asteroid${asteroidCount > 1 ? 's' : ''}`);
+                }
+                
+                display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')}`;
             }
         }
         
