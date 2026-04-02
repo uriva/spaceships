@@ -190,15 +190,6 @@
             font-family: 'Orbitron', sans-serif;
         }
         
-        .status-title {
-            color: #00ffff;
-            font-size: 12px;
-            letter-spacing: 3px;
-            text-transform: uppercase;
-            margin-bottom: 8px;
-            opacity: 0.7;
-        }
-        
         .status-value {
             color: #fff;
             font-size: 18px;
@@ -531,10 +522,9 @@
     <div class="crt-overlay"></div>
     
     <div class="status-display">
-        <div class="status-title">Command Mode</div>
         <div class="status-value" id="mode-display">TACTICAL</div>
     </div>
-    
+
     <div class="ship-hud">
         <div class="ship-selector">
             <div class="ship-dot" id="ship-0">1</div>
@@ -550,7 +540,8 @@
         <p><span class="key">CLICK</span> empty space to deselect</p>
         <p><span class="key">RIGHT-CLICK</span> ground to move</p>
         <p><span class="key">RIGHT-CLICK</span> asteroid to attack</p>
-        <p><span class="key">1/2/3</span> select ship directly</p>
+        <p><span class="key">CTRL+1/2/3</span> save selection to group</p>
+        <p><span class="key">1/2/3</span> recall saved group</p>
         <p class="scroll"><span class="key">L</span> focus camera on selected ship</p>
         <p class="scroll"><span class="key">WASD</span> fly camera</p>
         <p class="scroll"><span class="key">HOLD SPACE + WASD</span> pan/rotate camera</p>
@@ -616,6 +607,7 @@
         const DECELERATION = 0.008;         // passive drag
         const SHIP_MASS = 50000;            // tonnes
         const WEAPON_CHARGES = 100;         // laser capacitor charges
+        const G = 0.0001;                   // gravitational constant (tuned for gameplay)
         
         // Ship movement
         let targetPosition = null;
@@ -1722,8 +1714,30 @@
                         x: (Math.random() - 0.5) * 0.01,
                         y: (Math.random() - 0.5) * 0.01,
                         z: (Math.random() - 0.5) * 0.01
-                    }
+                    },
+                    // Mass proportional to volume (scale^3), density ~2 tonnes/unit³
+                    mass: asteroid.scale.x * asteroid.scale.y * asteroid.scale.z * 2
                 };
+                
+                // ~1 in 8 asteroids becomes a super-dense body (iron core / dwarf planet)
+                // These are heavy enough for ships to orbit without fuel
+                if (Math.random() < 0.125) {
+                    asteroid.userData.mass *= 200;
+                    asteroid.userData.isMassive = true;
+                    // Visual indicator: orange glow ring
+                    const avgScale = (asteroid.scale.x + asteroid.scale.y + asteroid.scale.z) / 3;
+                    const glowGeo = new THREE.RingGeometry(avgScale * 1.2, avgScale * 1.5, 32);
+                    const glowMat = new THREE.MeshBasicMaterial({
+                        color: 0xff6600,
+                        transparent: true,
+                        opacity: 0.15,
+                        side: THREE.DoubleSide
+                    });
+                    const glow = new THREE.Mesh(glowGeo, glowMat);
+                    glow.lookAt(camera.position);
+                    asteroid.add(glow);
+                    glow.name = 'massGlow';
+                }
                 
                 asteroids.push(asteroid);
                 scene.add(asteroid);
@@ -1784,10 +1798,27 @@
             if (key === 's' || code === 'KeyS' || key === 'arrowdown') keys.s = true;
             if (key === 'd' || code === 'KeyD' || key === 'arrowright') keys.d = true;
             
-            // Number keys to select ships
-            // Number keys 1-9 to select first 9 ships
+            // Number keys: Ctrl+N saves control group, plain N recalls group
             const num = parseInt(key);
-            if (num >= 1 && num <= 9 && spaceships.length >= num) selectShip(num - 1);
+            if (num >= 1 && num <= 9) {
+                if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault();
+                    // Save current selection to control group
+                    if (selectedObjects.length > 0) {
+                        controlGroups[num] = selectedObjects.slice(); // copy array
+                    }
+                } else {
+                    // Recall control group
+                    if (controlGroups[num] && controlGroups[num].length > 0) {
+                        // Filter out any destroyed/removed objects
+                        controlGroups[num] = controlGroups[num].filter(obj => obj.parent);
+                        if (controlGroups[num].length > 0) {
+                            deselectAll();
+                            controlGroups[num].forEach(obj => addToSelection(obj));
+                        }
+                    }
+                }
+            }
             
             // L key to focus camera on selected ship (works with or without shift, and any keyboard layout)
             // Double-tap L to zoom in closer
@@ -2287,9 +2318,12 @@
         }
         
         function moveShipTo(position) {
-            targetPosition = position.clone();
-            targetPosition.y = 0; // Keep on plane
-            isMoving = true;
+            if (selectedShipIndex < 0) return;
+            const ship = spaceships[selectedShipIndex];
+            ship.userData.behavior = {
+                type: 'move',
+                target: position.clone()
+            };
             showTargetMarker(position, 'move');
         }
         
@@ -2432,6 +2466,18 @@
                 }
                 
                 
+                // Apply gravity from all asteroids (free — no fuel cost)
+                const gravAccel = new THREE.Vector3(0, 0, 0);
+                asteroids.forEach(asteroid => {
+                    const toBody = asteroid.position.clone().sub(ship.position);
+                    const distSq = toBody.lengthSq();
+                    const dist = Math.sqrt(distSq);
+                    if (dist < 3) return; // avoid singularity at overlap
+                    // F = G * M / r², applied as acceleration (ship mass cancels)
+                    const strength = G * asteroid.userData.mass / distSq;
+                    gravAccel.add(toBody.normalize().multiplyScalar(strength));
+                });
+                data.velocity.add(gravAccel);
                 
                 // Apply physics: accelerate toward target velocity
                 if (data.isAccelerating && hasFuel) {
@@ -2548,7 +2594,10 @@
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
                                   obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
                     const sizeKm = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3 * KM_PER_UNIT);
-                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | ~${sizeKm}km</span> <span style="color:#888">${dist}</span>`;
+                    const mass = obj.userData.mass;
+                    const massStr = mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' : mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
+                    const massColor = obj.userData.isMassive ? '#ff6600' : '#aaaaaa';
+                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | ~${sizeKm}km</span> <span style="color:${massColor}">MASS:${massStr}</span> <span style="color:#888">${dist}</span>`;
                 }
             } else {
                 // Multiple objects selected - show avg distance
@@ -2574,26 +2623,44 @@
         }
         
         function updateShipHUD() {
-            // Update ship dots
+            // Update group dots — show groups 1/2/3 status
             for (let i = 0; i < 3; i++) {
                 const dot = document.getElementById(`ship-${i}`);
                 if (!dot) continue;
+                const groupNum = i + 1;
+                const group = controlGroups[groupNum];
                 
-                if (i < spaceships.length) {
-                    const ship = spaceships[i];
-                    dot.style.display = 'flex';
+                if (group && group.length > 0) {
+                    // Filter dead objects
+                    controlGroups[groupNum] = group.filter(obj => obj.parent);
+                    const liveGroup = controlGroups[groupNum];
                     
-                    if (i === selectedShipIndex) {
-                        dot.classList.add('active');
-                        dot.classList.remove('inactive');
+                    if (liveGroup.length > 0) {
+                        dot.style.display = 'flex';
+                        dot.textContent = groupNum;
+                        
+                        // Check if this group is currently selected (all members selected)
+                        const allSelected = liveGroup.every(obj => selectedObjects.includes(obj));
+                        if (allSelected && selectedObjects.length === liveGroup.length) {
+                            dot.classList.add('active');
+                            dot.classList.remove('inactive');
+                        } else {
+                            dot.classList.remove('active');
+                            dot.classList.add('inactive');
+                        }
+                        
+                        // Color: use first ship's team color, or blue for mixed/asteroid groups
+                        const firstShip = liveGroup.find(o => o.userData.type === 'spaceship');
+                        if (firstShip) {
+                            dot.style.borderColor = '#' + firstShip.userData.teamColor.toString(16).padStart(6, '0');
+                            dot.style.color = '#' + firstShip.userData.teamColor.toString(16).padStart(6, '0');
+                        } else {
+                            dot.style.borderColor = '#44aaff';
+                            dot.style.color = '#44aaff';
+                        }
                     } else {
-                        dot.classList.remove('active');
-                        dot.classList.add('inactive');
+                        dot.style.display = 'none';
                     }
-                    
-                    // Set color based on team
-                    dot.style.borderColor = '#' + ship.userData.teamColor.toString(16).padStart(6, '0');
-                    dot.style.color = '#' + ship.userData.teamColor.toString(16).padStart(6, '0');
                 } else {
                     dot.style.display = 'none';
                 }
@@ -2616,6 +2683,14 @@
                 asteroid.rotation.x += asteroid.userData.rotationSpeed.x;
                 asteroid.rotation.y += asteroid.userData.rotationSpeed.y;
                 asteroid.rotation.z += asteroid.userData.rotationSpeed.z;
+                // Keep massive asteroid glow ring facing camera
+                const glow = asteroid.getObjectByName('massGlow');
+                if (glow) {
+                    // Convert camera world position to asteroid local space for lookAt
+                    const worldCamPos = cameraPosition.clone();
+                    asteroid.worldToLocal(worldCamPos);
+                    glow.lookAt(worldCamPos);
+                }
             });
         }
         
@@ -3073,8 +3148,9 @@
                         };
                         break;
                     case 'STOP':
-                        data.behavior = null;
-                        data.velocity.set(0, 0, 0);
+                        data.behavior = {
+                            type: 'brake'
+                        };
                         break;
                     case 'ORBIT':
                         data.behavior = {
@@ -3114,37 +3190,48 @@
         }
         
         // ===== BEHAVIOR ENGINE (runs per frame per ship) =====
+        // Behaviors set targetVelocity + isAccelerating/isBraking flags.
+        // The physics engine in updateSpaceships() handles actual acceleration,
+        // fuel consumption, and engine particle effects.
         
         function updateShipBehaviors() {
             const BEHAVIOR_SPEED = 0.15;
             const ARRIVAL_THRESHOLD = 2;
+            const EFFECTIVE_BRAKE = DECELERATION * 2;
             
             spaceships.forEach(ship => {
                 const data = ship.userData;
                 if (!data.behavior) return;
                 
                 const b = data.behavior;
+                const speed = data.velocity.length();
+                // Distance needed to brake from current speed to zero
+                const brakeDist = speed > 0.01 ? (speed * speed) / (2 * EFFECTIVE_BRAKE) + ARRIVAL_THRESHOLD : 0;
                 
                 switch (b.type) {
                     case 'move': {
                         const dir = b.target.clone().sub(ship.position);
-                        dir.y = 0;  // Keep on plane? No, 3D movement
                         const dist = dir.length();
-                        if (dist > ARRIVAL_THRESHOLD) {
-                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                            data.velocity.lerp(dir, 0.05);
-                            // Consume fuel
-                            if (data.fuel > 0) {
-                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
-                                data.isAccelerating = true;
-                            }
+                        if (dist < ARRIVAL_THRESHOLD && speed < 0.02) {
+                            // Arrived and stopped
+                            data.velocity.set(0, 0, 0);
+                            data.behavior = null;
+                        } else if (dist > brakeDist) {
+                            // Accelerate toward target
+                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                            data.isAccelerating = true;
                         } else {
-                            // Arrived
-                            data.velocity.multiplyScalar(0.9);
-                            if (data.velocity.length() < 0.01) {
-                                data.velocity.set(0, 0, 0);
-                                data.behavior = null;
-                            }
+                            // Close enough — brake to stop
+                            data.isBraking = true;
+                        }
+                        break;
+                    }
+                    case 'brake': {
+                        if (speed < 0.02) {
+                            data.velocity.set(0, 0, 0);
+                            data.behavior = null;
+                        } else {
+                            data.isBraking = true;
                         }
                         break;
                     }
@@ -3156,31 +3243,28 @@
                             b.center.z + Math.sin(b.angle) * b.radius
                         );
                         const dir = targetPos.clone().sub(ship.position);
-                        dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                        data.velocity.lerp(dir, 0.08);
-                        if (data.fuel > 0) {
-                            data.fuel -= ACCELERATION_FUEL_COST * 0.05;
-                        }
+                        data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                        data.isAccelerating = true;
                         break;
                     }
                     case 'patrol': {
                         const target = b.goingToB ? b.pointB : b.pointA;
                         const dir = target.clone().sub(ship.position);
                         const dist = dir.length();
-                        if (dist > ARRIVAL_THRESHOLD) {
-                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                            data.velocity.lerp(dir, 0.05);
-                            if (data.fuel > 0) {
-                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
-                            }
-                        } else {
-                            // Flip direction
+                        if (dist < ARRIVAL_THRESHOLD && speed < 0.02) {
+                            // At waypoint, flip direction
                             b.goingToB = !b.goingToB;
+                        } else if (dist > brakeDist) {
+                            // Accelerate toward waypoint
+                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                            data.isAccelerating = true;
+                        } else {
+                            // Approaching waypoint — brake
+                            data.isBraking = true;
                         }
                         break;
                     }
                     case 'follow': {
-                        // Get target position - either a ship or the camera
                         let targetPos;
                         if (b.followCamera) {
                             targetPos = cameraPosition.clone();
@@ -3191,34 +3275,32 @@
                         }
                         const dir = targetPos.clone().sub(ship.position);
                         const dist = dir.length();
-                        if (dist > b.distance) {
-                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                            data.velocity.lerp(dir, 0.05);
-                            if (data.fuel > 0) {
-                                data.fuel -= ACCELERATION_FUEL_COST * 0.08;
-                            }
-                        } else {
-                            data.velocity.multiplyScalar(0.95);
+                        if (dist > b.distance + brakeDist) {
+                            // Too far — accelerate toward target
+                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                            data.isAccelerating = true;
+                        } else if (dist < b.distance && speed > 0.02) {
+                            // Within distance but still moving — brake
+                            data.isBraking = true;
                         }
+                        // else: within distance and slow enough, coast
                         break;
                     }
                     case 'attack': {
-                        // Move toward target then fire when close
                         const dir = b.target.clone().sub(ship.position);
                         const dist = dir.length();
-                        if (dist > 30) {
-                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                            data.velocity.lerp(dir, 0.05);
-                            if (data.fuel > 0) {
-                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
-                            }
+                        if (dist > 30 + brakeDist) {
+                            // Close in on target
+                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                            data.isAccelerating = true;
+                        } else if (dist > 30) {
+                            // Approaching firing range — brake
+                            data.isBraking = true;
                         } else {
-                            // In range - slow down and fire
-                            data.velocity.multiplyScalar(0.95);
-                            // Fire periodically
+                            // In range — brake and fire
+                            if (speed > 0.02) data.isBraking = true;
                             if (!b.lastFired || Date.now() - b.lastFired > 2000) {
                                 if (data.weapons > 0) {
-                                    // Find nearest asteroid to target
                                     let nearest = null, nearestDist = Infinity;
                                     asteroids.forEach(a => {
                                         const d = a.position.distanceTo(b.target);

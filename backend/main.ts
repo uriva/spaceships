@@ -46,6 +46,8 @@ Positions: [x, y, z] coordinates, ship names, or "nearest_asteroid"
 Rules:
 - For COMMANDS: output ONLY DSL commands, one per line
 - For QUESTIONS about ship status/fuel/position: output MSG: followed by your answer using the CONTEXT data
+- Be tolerant of typos, slang, and casual language. "boys", "guys", "fleet", "everyone", "them all" = the ships. "bpys" is a typo for "boys". Interpret intent, don't be pedantic.
+- NEVER say you can't understand or ask for clarification. Always make your best guess at what the user meant.
 - NEVER ask clarifying questions. Always use sensible defaults:
   - "the center" = [0, 0, 0]
   - "orbit" without radius = RADIUS 30
@@ -72,12 +74,11 @@ FOLLOW Ship-03 TARGET Ship-01 DISTANCE 15
 User: "defensive perimeter"
 ORBIT all AROUND [0,0,0] RADIUS 50
 
-User: "spread the fleet out"
-MOVE 1-3 TO [100, 20, 50]
-MOVE 4-6 TO [-80, -10, 120]
-MOVE 7-9 TO [60, 30, -100]
-MOVE 10-12 TO [-120, -20, -80]
-MOVE 13-15 TO [0, 50, 150]`;
+User: "how much fuel do the boys have"
+MSG: Here's the fleet fuel status: Ship-01: 450t (90%), Ship-02: 380t (76%) ...
+
+User: "where are my guys"
+MSG: Fleet positions: Ship-01 is at [0, 0, 0], Ship-02 is at [12, 3, -8] ...`;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
