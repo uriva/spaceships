@@ -523,6 +523,11 @@
     
     <div class="status-display">
         <div class="status-value" id="mode-display">TACTICAL</div>
+        <div style="margin-top: 10px; font-family: 'Orbitron', sans-serif; font-size: 9px; color: #888; letter-spacing: 1px;">
+            <label for="gravity-slider">GRAVITY ×<span id="gravity-label">1e9</span></label>
+            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="18"
+                style="width: 120px; display: block; margin-top: 4px; accent-color: #00ffff;">
+        </div>
     </div>
 
     <div class="ship-hud">
@@ -607,7 +612,13 @@
         const DECELERATION = 0.008;         // passive drag
         const SHIP_MASS = 50000;            // tonnes
         const WEAPON_CHARGES = 100;         // laser capacitor charges
-        const G = 0.0001;                   // gravitational constant (tuned for gameplay)
+        const G_REAL = 6.674e-11;           // real gravitational constant (m³/(kg·s²))
+        // Convert to game units: gu for distance (1gu=100m), tonnes for mass, frames for time (60fps)
+        // G_game = G_real × (1000 kg/t) / (100 m/gu)³ / (60 frames/s)²
+        //        = G_real × 1000 / 1e6 / 3600 = G_real × 2.778e-7
+        const G_GAME = G_REAL * 1000 / 1e6 / 3600;  // ~1.854e-17 in game units
+        let gravityMultiplier = 1e9;        // ratio of effective G to real G (tunable via HUD)
+        const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
         
         // Ship movement
         let targetPosition = null;
@@ -644,6 +655,22 @@
         let lasers = [];
         
         function init() {
+            // Wire up gravity slider (log scale: slider value = log10(multiplier) * 2)
+            const gravSlider = document.getElementById('gravity-slider');
+            const gravLabel = document.getElementById('gravity-label');
+            function updateGravityFromSlider() {
+                const exp = parseFloat(gravSlider.value) / 2; // slider 0-24 → exponent 0-12
+                gravityMultiplier = Math.pow(10, exp);
+                // Format label
+                if (exp === 0) gravLabel.textContent = '1';
+                else if (exp % 1 === 0) gravLabel.textContent = '1e' + exp;
+                else gravLabel.textContent = (gravityMultiplier).toExponential(1);
+            }
+            gravSlider.addEventListener('input', updateGravityFromSlider);
+            gravSlider.addEventListener('keydown', (e) => e.stopPropagation());
+            gravSlider.addEventListener('keyup', (e) => e.stopPropagation());
+            updateGravityFromSlider();
+            
             // Scene setup
             scene = new THREE.Scene();
             scene.fog = new THREE.FogExp2(0x050508, 0.0005);
@@ -1706,6 +1733,15 @@
                 
                 asteroid.castShadow = true;
                 asteroid.receiveShadow = true;
+                
+                // Realistic mass: treat as ellipsoid, volume = (4/3)π × rx × ry × rz
+                // Scale is in game units (1 gu = 100m), density = ROCK_DENSITY kg/m³
+                const rx = asteroid.scale.x * 100; // meters
+                const ry = asteroid.scale.y * 100;
+                const rz = asteroid.scale.z * 100;
+                const volumeM3 = (4 / 3) * Math.PI * rx * ry * rz;
+                const asteroidMass = volumeM3 * ROCK_DENSITY / 1000; // tonnes
+                
                 asteroid.userData = { 
                     type: 'asteroid', 
                     selectable: true,
@@ -1715,8 +1751,7 @@
                         y: (Math.random() - 0.5) * 0.01,
                         z: (Math.random() - 0.5) * 0.01
                     },
-                    // Mass proportional to volume (scale^3), density ~2 tonnes/unit³
-                    mass: asteroid.scale.x * asteroid.scale.y * asteroid.scale.z * 2
+                    mass: asteroidMass
                 };
                 
                 // ~1 in 8 asteroids becomes a super-dense body (iron core / dwarf planet)
@@ -2431,11 +2466,8 @@
                 
                 // Determine if ship is changing velocity (accelerating or braking)
                 const isChangingVelocity = data.isAccelerating || data.isBraking;
-                const isMoving = speed > 0.01;
-                const shouldShowEngine = (isChangingVelocity || isMoving) && hasFuel;
-                
-                // Engine particles when thrusting or moving with velocity
-                if (shouldShowEngine && (isChangingVelocity || Math.random() > 0.7)) {
+                // Engine particles only when actively thrusting (not gravity drift)
+                if (isChangingVelocity && hasFuel) {
                     const particleGeometry = new THREE.SphereGeometry(0.1, 4, 4);
                     const particleMaterial = new THREE.MeshBasicMaterial({
                         color: data.teamColor,
@@ -2467,6 +2499,7 @@
                 
                 
                 // Apply gravity from all asteroids (free — no fuel cost)
+                const G_eff = G_GAME * gravityMultiplier;
                 const gravAccel = new THREE.Vector3(0, 0, 0);
                 asteroids.forEach(asteroid => {
                     const toBody = asteroid.position.clone().sub(ship.position);
@@ -2474,7 +2507,7 @@
                     const dist = Math.sqrt(distSq);
                     if (dist < 3) return; // avoid singularity at overlap
                     // F = G * M / r², applied as acceleration (ship mass cancels)
-                    const strength = G * asteroid.userData.mass / distSq;
+                    const strength = G_eff * asteroid.userData.mass / distSq;
                     gravAccel.add(toBody.normalize().multiplyScalar(strength));
                 });
                 data.velocity.add(gravAccel);
@@ -2512,6 +2545,25 @@
                         const moveDir = data.velocity.clone().normalize();
                         const targetRotation = Math.atan2(moveDir.x, moveDir.z);
                         ship.rotation.y = targetRotation;
+                    }
+                }
+                
+                // Collision: push ship out of any asteroid it overlaps
+                const shipRadius = 2; // approximate ship hull radius
+                for (const asteroid of asteroids) {
+                    const avgScale = (asteroid.scale.x + asteroid.scale.y + asteroid.scale.z) / 3;
+                    const collisionRadius = avgScale + shipRadius;
+                    const toShip = ship.position.clone().sub(asteroid.position);
+                    const dist = toShip.length();
+                    if (dist < collisionRadius && dist > 0.01) {
+                        // Push ship to surface
+                        ship.position.copy(asteroid.position).add(toShip.normalize().multiplyScalar(collisionRadius));
+                        // Kill velocity
+                        data.velocity.set(0, 0, 0);
+                        // Clear behavior so it doesn't keep trying to move into the rock
+                        if (data.behavior && data.behavior.type === 'move') {
+                            data.behavior = null;
+                        }
                     }
                 }
                 
@@ -2595,7 +2647,10 @@
                                   obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
                     const sizeKm = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3 * KM_PER_UNIT);
                     const mass = obj.userData.mass;
-                    const massStr = mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' : mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
+                    const massStr = mass >= 1e12 ? (mass / 1e12).toFixed(1) + 'Tt' :
+                                   mass >= 1e9 ? (mass / 1e9).toFixed(1) + 'Gt' :
+                                   mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' :
+                                   mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
                     const massColor = obj.userData.isMassive ? '#ff6600' : '#aaaaaa';
                     display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | ~${sizeKm}km</span> <span style="color:${massColor}">MASS:${massStr}</span> <span style="color:#888">${dist}</span>`;
                 }
