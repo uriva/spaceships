@@ -2738,21 +2738,42 @@
                     }
                 }
                 
-                // Elastic collision with asteroids (reflect velocity off surface normal, lose 30%)
+                // Elastic collision with asteroids — ellipsoid-aware, respects rotation
                 const shipRadius = 2;
                 for (const asteroid of asteroids) {
-                    const avgScale = (asteroid.scale.x + asteroid.scale.y + asteroid.scale.z) / 3;
-                    const collisionRadius = avgScale + shipRadius;
-                    const toShip = ship.position.clone().sub(asteroid.position);
-                    const dist = toShip.length();
-                    if (dist < collisionRadius && dist > 0.01) {
-                        const normal = toShip.normalize();
-                        const vDotN = data.velocity.dot(normal);
+                    // Transform ship position into asteroid's local space (accounts for rotation)
+                    const localPos = asteroid.worldToLocal(ship.position.clone());
+                    // In local space, the asteroid is an ellipsoid with semi-axes = scale
+                    // Pad the semi-axes by shipRadius so we detect when the ship SURFACE touches
+                    const sx = asteroid.scale.x + shipRadius;
+                    const sy = asteroid.scale.y + shipRadius;
+                    const sz = asteroid.scale.z + shipRadius;
+                    // Ellipsoid test: (x/sx)² + (y/sy)² + (z/sz)² < 1 means inside
+                    const ex = localPos.x / sx;
+                    const ey = localPos.y / sy;
+                    const ez = localPos.z / sz;
+                    const ellipDist = ex * ex + ey * ey + ez * ez;
+                    
+                    if (ellipDist < 1 && ellipDist > 0.0001) {
+                        // Ellipsoid surface normal in local space: gradient of (x/sx²,y/sy²,z/sz²)
+                        const localNormal = new THREE.Vector3(
+                            localPos.x / (sx * sx),
+                            localPos.y / (sy * sy),
+                            localPos.z / (sz * sz)
+                        ).normalize();
+                        
+                        // Transform normal back to world space (rotation only, no translation)
+                        const worldNormal = localNormal.clone().applyQuaternion(asteroid.quaternion).normalize();
+                        
+                        const vDotN = data.velocity.dot(worldNormal);
                         if (vDotN < 0) { // only act if moving into the surface
-                            // Push ship to surface
-                            ship.position.copy(asteroid.position).add(normal.clone().multiplyScalar(collisionRadius));
+                            // Push ship to ellipsoid surface in local space, then back to world
+                            // Scale local position so it sits exactly on the padded ellipsoid
+                            const pushFactor = 1 / Math.sqrt(ellipDist);
+                            const surfaceLocal = localPos.clone().multiplyScalar(pushFactor);
+                            ship.position.copy(asteroid.localToWorld(surfaceLocal));
                             // Reflect velocity: v' = v - 2(v·n)n, then dampen
-                            data.velocity.sub(normal.clone().multiplyScalar(2 * vDotN));
+                            data.velocity.sub(worldNormal.clone().multiplyScalar(2 * vDotN));
                             data.velocity.multiplyScalar(0.7); // 30% energy loss
                             // Clear move behavior so it doesn't ram back in
                             if (data.behavior && data.behavior.type === 'move') {
