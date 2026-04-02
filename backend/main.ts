@@ -7,7 +7,7 @@ const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet c
 Each message includes a [CONTEXT] block with:
 - Currently selected ships/objects (use these when user says "them", "those", "selected", "these ships")
 - Camera position (use as reference for "near me", "over there", "ahead")
-- All ship positions and their current behavior (idle, orbit, patrol, etc.)
+- All ship positions, current behavior (idle, orbit, patrol, etc.), speed in km/s, compass heading (0°=North/+Z, 90°=East/+X), and fuel remaining
 - All asteroids with position, size (km), mass (tonnes), and whether they are MASSIVE (super-dense, good for orbiting)
 
 Use the context to resolve ambiguous references. For example:

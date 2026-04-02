@@ -652,6 +652,9 @@
         
         // Animation
         let engineParticles = [];
+        const particlePool = [];           // reusable dead particles
+        const sharedParticleGeo = new THREE.SphereGeometry(0.1, 4, 4);
+        const particleMaterialCache = {};  // keyed by color hex
         let lasers = [];
         
         function init() {
@@ -2577,13 +2580,31 @@
                 const isChangingVelocity = data.isAccelerating || data.isBraking;
                 // Engine particles only when actively thrusting (not gravity drift)
                 if (isChangingVelocity && hasFuel) {
-                    const particleGeometry = new THREE.SphereGeometry(0.1, 4, 4);
-                    const particleMaterial = new THREE.MeshBasicMaterial({
-                        color: data.teamColor,
-                        transparent: true,
-                        opacity: 0.6
-                    });
-                    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+                    // Reuse pooled particle or create new (shared geo + cached material)
+                    let particle;
+                    if (particlePool.length > 0) {
+                        particle = particlePool.pop();
+                        // Swap material if color changed
+                        if (particle.material.color.getHex() !== data.teamColor) {
+                            if (!particleMaterialCache[data.teamColor]) {
+                                particleMaterialCache[data.teamColor] = new THREE.MeshBasicMaterial({
+                                    color: data.teamColor, transparent: true, opacity: 0.6
+                                });
+                            }
+                            particle.material = particleMaterialCache[data.teamColor];
+                        }
+                        particle.material.opacity = 0.6;
+                        particle.scale.setScalar(1);
+                        particle.visible = true;
+                    } else {
+                        if (!particleMaterialCache[data.teamColor]) {
+                            particleMaterialCache[data.teamColor] = new THREE.MeshBasicMaterial({
+                                color: data.teamColor, transparent: true, opacity: 0.6
+                            });
+                        }
+                        particle = new THREE.Mesh(sharedParticleGeo, particleMaterialCache[data.teamColor]);
+                        scene.add(particle);
+                    }
                     
                     // Get ship's forward direction
                     const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(
@@ -2602,7 +2623,6 @@
                         ),
                         life: 1.0
                     };
-                    scene.add(particle);
                     engineParticles.push(particle);
                 }
                 
@@ -2769,7 +2789,8 @@
                 p.scale.multiplyScalar(0.95);
                 
                 if (p.userData.life <= 0) {
-                    scene.remove(p);
+                    p.visible = false;
+                    particlePool.push(p);
                     engineParticles.splice(i, 1);
                 }
             }
@@ -3633,11 +3654,22 @@
             // Camera position
             ctx += `Camera at [${Math.round(cameraPosition.x)},${Math.round(cameraPosition.y)},${Math.round(cameraPosition.z)}]. `;
             
-            // Ship positions and states
+            // Ship positions, states, speed, and bearing
             const shipStates = spaceships.map(s => {
                 const p = s.position;
-                const b = s.userData.behavior ? s.userData.behavior.type : 'idle';
-                return `${s.userData.name} at [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ${b}`;
+                const d = s.userData;
+                const b = d.behavior ? d.behavior.type : 'idle';
+                const spd = d.velocity.length();
+                const spdKmS = Math.round(spd * KM_PER_UNIT * 60); // km/s assuming 60fps
+                let bearing = '';
+                if (spd > 0.01) {
+                    const v = d.velocity;
+                    // Compass bearing from velocity direction in XZ plane (0°=+Z/North, 90°=+X/East)
+                    const deg = ((Math.atan2(v.x, v.z) * 180 / Math.PI) + 360) % 360;
+                    bearing = ` hdg ${Math.round(deg)}°`;
+                }
+                const fuel = `${Math.round(d.fuel)}/${MAX_FUEL}t`;
+                return `${d.name} [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ${b} ${spdKmS}km/s${bearing} fuel:${fuel}`;
             });
             ctx += `Ships: ${shipStates.join('; ')}. `;
             
