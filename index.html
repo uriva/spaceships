@@ -1815,6 +1815,80 @@
                 // Register asteroid position to prevent future overlaps
                 registerPosition(asteroidPos, scale * 1.5);
             }
+            
+            // === THE LEVIATHAN — a single colossal asteroid ===
+            // Build from high-detail icosahedron with aggressive displacement
+            const levGeo = new THREE.IcosahedronGeometry(1, 4);
+            const levPos = levGeo.attributes.position;
+            // Seed-based noise for coherent crags
+            for (let j = 0; j < levPos.count; j++) {
+                let x = levPos.getX(j);
+                let y = levPos.getY(j);
+                let z = levPos.getZ(j);
+                // Multi-octave displacement for interesting terrain
+                const angle1 = Math.atan2(z, x);
+                const angle2 = Math.acos(y / Math.sqrt(x*x + y*y + z*z + 0.001));
+                const ridge = Math.abs(Math.sin(angle1 * 5 + angle2 * 3)) * 0.3;
+                const crater = Math.max(0, Math.sin(angle1 * 8) * Math.sin(angle2 * 6)) * 0.2;
+                const coarse = (Math.sin(angle1 * 2.7 + 1.3) * Math.cos(angle2 * 3.1 + 0.7)) * 0.15;
+                const fine = (Math.random() - 0.5) * 0.08;
+                const displacement = 1.0 + ridge - crater + coarse + fine;
+                levPos.setXYZ(j, x * displacement, y * displacement, z * displacement);
+            }
+            levGeo.computeVertexNormals();
+            
+            // Dark iron material with subtle warm emissive
+            const levMat = new THREE.MeshStandardMaterial({
+                color: new THREE.Color(0.18, 0.15, 0.13),
+                emissive: new THREE.Color(0.08, 0.04, 0.02),
+                emissiveIntensity: 0.3,
+                roughness: 0.9,
+                metalness: 0.5,
+            });
+            
+            const leviathan = new THREE.Mesh(levGeo, levMat);
+            // Place it at a notable position — offset from center, visible but not in the way
+            leviathan.position.set(180, -30, 160);
+            // Massive scale: ~50 game units avg = ~5km radius
+            leviathan.scale.set(55, 40, 65);
+            leviathan.rotation.set(0.4, 0.8, 0.2);
+            leviathan.castShadow = true;
+            leviathan.receiveShadow = true;
+            
+            const levRx = leviathan.scale.x * 100;
+            const levRy = leviathan.scale.y * 100;
+            const levRz = leviathan.scale.z * 100;
+            const levVolume = (4 / 3) * Math.PI * levRx * levRy * levRz;
+            // Iron-nickel density (7800 kg/m³) — this is a metallic monster
+            const levMass = levVolume * 7800 / 1000;
+            
+            leviathan.userData = {
+                type: 'asteroid',
+                selectable: true,
+                shapeType: 0.01, // potato display name
+                rotationSpeed: { x: 0.0003, y: 0.0008, z: 0.0001 },
+                mass: levMass,
+                isMassive: true,
+                name: 'Leviathan',
+            };
+            
+            // Orange glow ring
+            const levAvgScale = (leviathan.scale.x + leviathan.scale.y + leviathan.scale.z) / 3;
+            const levGlowGeo = new THREE.RingGeometry(levAvgScale * 1.2, levAvgScale * 1.5, 64);
+            const levGlowMat = new THREE.MeshBasicMaterial({
+                color: 0xff6600,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide,
+            });
+            const levGlow = new THREE.Mesh(levGlowGeo, levGlowMat);
+            levGlow.lookAt(camera.position);
+            levGlow.name = 'massGlow';
+            leviathan.add(levGlow);
+            
+            asteroids.push(leviathan);
+            scene.add(leviathan);
+            registerPosition(leviathan.position, 70);
         }
         
         function createBoundarySphere() {
@@ -3298,15 +3372,31 @@
                             type: 'brake'
                         };
                         break;
-                    case 'ORBIT':
+                    case 'ORBIT': {
+                        // Find nearest asteroid to the specified center position
+                        let nearestAst = null;
+                        let nearestDist = Infinity;
+                        asteroids.forEach(a => {
+                            const d = a.position.distanceTo(parsed.center);
+                            if (d < nearestDist) { nearestDist = d; nearestAst = a; }
+                        });
+                        if (!nearestAst) {
+                            addChatMessage('SYSTEM', 'No asteroids found to orbit.');
+                            break;
+                        }
+                        // Default radius: slightly larger than asteroid's average scale
+                        const avgScale = (nearestAst.scale.x + nearestAst.scale.y + nearestAst.scale.z) / 3;
+                        const orbitRadius = parsed.radius || (avgScale * 2);
                         data.behavior = {
                             type: 'orbit',
-                            center: parsed.center.clone(),
-                            radius: parsed.radius,
-                            angle: (i / parsed.ships.length) * Math.PI * 2,  // Spread ships evenly
-                            speed: 0.01
+                            body: nearestAst,
+                            radius: orbitRadius,
+                            phase: 'approach',  // approach → inject → freefall
                         };
+                        const bodyName = nearestAst.userData.name || 'asteroid';
+                        addChatMessage('SYSTEM', `${data.name}: orbital injection to ${bodyName} at r=${Math.round(orbitRadius)}`);
                         break;
+                    }
                     case 'PATROL':
                         data.behavior = {
                             type: 'patrol',
@@ -3382,15 +3472,69 @@
                         break;
                     }
                     case 'orbit': {
-                        b.angle += b.speed;
-                        const targetPos = new THREE.Vector3(
-                            b.center.x + Math.cos(b.angle) * b.radius,
-                            b.center.y,
-                            b.center.z + Math.sin(b.angle) * b.radius
-                        );
-                        const dir = targetPos.clone().sub(ship.position);
-                        data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
-                        data.isAccelerating = true;
+                        // Real orbital injection: approach target orbit altitude,
+                        // thrust to reach circular orbit velocity, then coast on gravity.
+                        const G_eff = G_GAME * gravityMultiplier;
+                        const toBody = b.body.position.clone().sub(ship.position);
+                        const distToBody = toBody.length();
+                        const orbitR = b.radius;
+                        
+                        if (b.phase === 'approach') {
+                            // Fly toward a point at orbit radius from the body
+                            // Pick approach point: closest point on orbit circle to current position
+                            const radialDir = ship.position.clone().sub(b.body.position);
+                            radialDir.y = 0; // keep orbit in XZ plane
+                            if (radialDir.length() < 0.1) radialDir.set(1, 0, 0);
+                            radialDir.normalize();
+                            const approachTarget = b.body.position.clone().add(radialDir.multiplyScalar(orbitR));
+                            const toTarget = approachTarget.clone().sub(ship.position);
+                            const distToTarget = toTarget.length();
+                            
+                            if (distToTarget < ARRIVAL_THRESHOLD + brakeDist && distToTarget < 5) {
+                                // Close enough to orbit altitude — switch to injection
+                                b.phase = 'inject';
+                            } else if (distToTarget < brakeDist + 2) {
+                                // Need to brake to arrive at orbit altitude
+                                data.isBraking = true;
+                            } else {
+                                // Accelerate toward orbit altitude
+                                data.targetVelocity.copy(toTarget.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                                data.isAccelerating = true;
+                            }
+                        } else if (b.phase === 'inject') {
+                            // Compute circular orbit velocity: v = sqrt(G_eff * M / r)
+                            const orbitalSpeed = Math.sqrt(G_eff * b.body.userData.mass / distToBody);
+                            
+                            // Tangent direction: perpendicular to radial, in XZ plane
+                            const radial = ship.position.clone().sub(b.body.position).normalize();
+                            const tangent = new THREE.Vector3(-radial.z, 0, radial.x); // 90° in XZ
+                            const targetVel = tangent.multiplyScalar(orbitalSpeed);
+                            
+                            // How close is our velocity to the target orbital velocity?
+                            const velError = targetVel.clone().sub(data.velocity);
+                            
+                            if (velError.length() < 0.005 || orbitalSpeed < 0.005) {
+                                // Close enough — cut engines, enter freefall
+                                b.phase = 'freefall';
+                            } else if (orbitalSpeed > MAX_SPEED) {
+                                // Orbital speed exceeds our max — can't achieve stable orbit here
+                                // Fall through to freefall anyway, we'll be in an elliptical orbit
+                                b.phase = 'freefall';
+                            } else {
+                                // Thrust toward orbital velocity
+                                data.targetVelocity.copy(targetVel);
+                                data.isAccelerating = true;
+                            }
+                        } else {
+                            // freefall — engines off, gravity does the work
+                            // Just monitor: if we drift too far, re-inject
+                            const driftRatio = distToBody / orbitR;
+                            if (driftRatio > 2.0 || driftRatio < 0.3) {
+                                // Orbit has decayed or escaped — re-approach
+                                b.phase = 'approach';
+                            }
+                            // Otherwise: do nothing. Pure gravity orbit.
+                        }
                         break;
                     }
                     case 'patrol': {
@@ -3478,6 +3622,7 @@
             if (selectedObjects.length > 0) {
                 const selNames = selectedObjects.map(o => {
                     if (o.userData.type === 'spaceship') return o.userData.name;
+                    if (o.userData.name) return o.userData.name;
                     return 'Asteroid at [' + Math.round(o.position.x) + ',' + Math.round(o.position.y) + ',' + Math.round(o.position.z) + ']';
                 });
                 ctx += `Currently selected: ${selNames.join(', ')}. `;
@@ -3494,7 +3639,21 @@
                 const b = s.userData.behavior ? s.userData.behavior.type : 'idle';
                 return `${s.userData.name} at [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ${b}`;
             });
-            ctx += `Ships: ${shipStates.join('; ')}`;
+            ctx += `Ships: ${shipStates.join('; ')}. `;
+            
+            // Asteroid data — include all asteroids with position, size, mass, and name
+            const fmtMass = (m) => m >= 1e12 ? (m/1e12).toFixed(1)+'Tt' :
+                                   m >= 1e9  ? (m/1e9).toFixed(1)+'Gt' :
+                                   m >= 1e6  ? (m/1e6).toFixed(1)+'Mt' :
+                                   m >= 1000 ? (m/1000).toFixed(1)+'kt' : Math.round(m)+'t';
+            const astData = asteroids.map(a => {
+                const p = a.position;
+                const sizeKm = Math.round((a.scale.x + a.scale.y + a.scale.z) / 3 * KM_PER_UNIT);
+                const label = a.userData.name || ('asteroid@[' + Math.round(p.x)+','+Math.round(p.y)+','+Math.round(p.z)+']');
+                const massive = a.userData.isMassive ? ' MASSIVE' : '';
+                return `${label} [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ~${sizeKm}km ${fmtMass(a.userData.mass)}${massive}`;
+            });
+            ctx += `Asteroids (${asteroids.length}): ${astData.join('; ')}`;
             
             return ctx;
         }
