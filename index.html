@@ -3013,7 +3013,7 @@
                     return { cmd: 'PATROL', ships, pointA: pos1, pointB: pos2 };
                 }
                 case 'FOLLOW': {
-                    // FOLLOW <ships> TARGET <ship> DISTANCE <n>
+                    // FOLLOW <ships> TARGET <ship_or_position_or_CAMERA> DISTANCE <n>
                     const targetIdx = tokens.findIndex(t => t.toUpperCase() === 'TARGET');
                     const distIdx = tokens.findIndex(t => t.toUpperCase() === 'DISTANCE');
                     if (targetIdx < 0) return { error: 'FOLLOW requires TARGET keyword' };
@@ -3021,10 +3021,23 @@
                     const targetSpec = tokens.slice(targetIdx + 1, distIdx > 0 ? distIdx : tokens.length).join(' ');
                     const distance = distIdx > 0 ? parseFloat(tokens[distIdx + 1]) : 10;
                     const ships = findShips(shipsSpec);
-                    const targetShip = findShip(targetSpec);
                     if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
-                    if (!targetShip) return { error: `Target not found: "${targetSpec}"` };
-                    return { cmd: 'FOLLOW', ships, targetShip, distance };
+                    
+                    // Check for CAMERA target
+                    if (targetSpec.toLowerCase() === 'camera' || targetSpec.toLowerCase() === 'me') {
+                        return { cmd: 'FOLLOW', ships, followCamera: true, distance };
+                    }
+                    // Check for ship target
+                    const targetShip = findShip(targetSpec);
+                    if (targetShip) {
+                        return { cmd: 'FOLLOW', ships, targetShip, distance };
+                    }
+                    // Check for position target
+                    const targetPos = parsePosition(targetSpec);
+                    if (targetPos) {
+                        return { cmd: 'MOVE', ships, target: targetPos };
+                    }
+                    return { error: `Target not found: "${targetSpec}"` };
                 }
                 case 'ATTACK': {
                     // ATTACK <ships> TARGET <target>
@@ -3083,7 +3096,8 @@
                     case 'FOLLOW':
                         data.behavior = {
                             type: 'follow',
-                            targetShip: parsed.targetShip,
+                            targetShip: parsed.targetShip || null,
+                            followCamera: parsed.followCamera || false,
                             distance: parsed.distance
                         };
                         break;
@@ -3166,8 +3180,15 @@
                         break;
                     }
                     case 'follow': {
-                        if (!b.targetShip) { data.behavior = null; break; }
-                        const targetPos = b.targetShip.position.clone();
+                        // Get target position - either a ship or the camera
+                        let targetPos;
+                        if (b.followCamera) {
+                            targetPos = cameraPosition.clone();
+                        } else if (b.targetShip) {
+                            targetPos = b.targetShip.position.clone();
+                        } else {
+                            data.behavior = null; break;
+                        }
                         const dir = targetPos.clone().sub(ship.position);
                         const dist = dir.length();
                         if (dist > b.distance) {
