@@ -407,6 +407,121 @@
             0% { opacity: 1; }
             100% { opacity: 0; }
         }
+        
+        /* Starfleet Computer Chat Panel */
+        .chat-panel {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 400px;
+            max-height: 350px;
+            z-index: 50;
+            background: rgba(10, 12, 20, 0.92);
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            font-family: 'Share Tech Mono', monospace;
+        }
+        
+        .chat-header {
+            padding: 8px 15px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: #00ffff;
+            border-bottom: 1px solid rgba(0, 255, 255, 0.2);
+            text-transform: uppercase;
+        }
+        
+        .chat-log {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 15px;
+            max-height: 220px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        
+        .chat-log::-webkit-scrollbar {
+            width: 4px;
+        }
+        .chat-log::-webkit-scrollbar-thumb {
+            background: rgba(0, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+        
+        .chat-msg {
+            margin-bottom: 8px;
+        }
+        
+        .chat-msg.user {
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .chat-msg.user::before {
+            content: '> ';
+            color: #00ffff;
+        }
+        
+        .chat-msg.computer {
+            color: rgba(0, 255, 200, 0.9);
+        }
+        
+        .chat-msg.computer::before {
+            content: 'COMPUTER: ';
+            color: rgba(0, 255, 255, 0.6);
+            font-size: 10px;
+        }
+        
+        .chat-msg.dsl {
+            color: rgba(255, 170, 0, 0.8);
+            font-size: 11px;
+            padding: 4px 8px;
+            background: rgba(255, 170, 0, 0.05);
+            border-left: 2px solid rgba(255, 170, 0, 0.3);
+            margin: 4px 0;
+        }
+        
+        .chat-msg.error {
+            color: rgba(255, 80, 80, 0.9);
+        }
+        
+        .chat-input-row {
+            display: flex;
+            border-top: 1px solid rgba(0, 255, 255, 0.2);
+        }
+        
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #fff;
+            padding: 10px 15px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 13px;
+            outline: none;
+        }
+        
+        .chat-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+        
+        .chat-send {
+            background: transparent;
+            border: none;
+            color: #00ffff;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+        
+        .chat-send:hover {
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -450,6 +565,17 @@
     
     <div class="target-marker" id="target-marker">
         <div class="target-cross"></div>
+    </div>
+    
+    <div class="chat-panel" id="chat-panel">
+        <div class="chat-header">Starfleet Computer</div>
+        <div class="chat-log" id="chat-log">
+            <div class="chat-msg computer">Systems online. Awaiting orders, Commander.</div>
+        </div>
+        <div class="chat-input-row">
+            <input class="chat-input" id="chat-input" type="text" placeholder="Enter command..." autocomplete="off" />
+            <button class="chat-send" onclick="submitChat()">EXEC</button>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -2630,6 +2756,7 @@
             applySmoothZoom();
             applyCameraTransition();
             updateKeyboardControls();
+            updateShipBehaviors();
             updateSpaceships();
             updateAsteroids();
             updateLasers();
@@ -2646,6 +2773,493 @@
         
         // Initialize
         init();
+        
+        // ===== STARFLEET COMPUTER: DSL ENGINE =====
+        
+        // Chat input handling
+        const chatInput = document.getElementById('chat-input');
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                submitChat();
+            }
+        });
+        // Prevent game keys when typing in chat
+        chatInput.addEventListener('keydown', (e) => e.stopPropagation());
+        chatInput.addEventListener('keyup', (e) => e.stopPropagation());
+        
+        function addChatMsg(text, type = 'computer') {
+            const log = document.getElementById('chat-log');
+            const msg = document.createElement('div');
+            msg.className = 'chat-msg ' + type;
+            msg.textContent = text;
+            log.appendChild(msg);
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function addChatDSL(text) {
+            const log = document.getElementById('chat-log');
+            const msg = document.createElement('div');
+            msg.className = 'chat-msg dsl';
+            msg.textContent = text;
+            log.appendChild(msg);
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        // Find ship by name (case-insensitive, partial match)
+        function findShip(name) {
+            const lower = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return spaceships.find(s => {
+                const sName = s.userData.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+                return sName === lower || sName.includes(lower);
+            });
+        }
+        
+        // Find ships by range (e.g. "1-5" or "1,3,5")
+        function findShips(spec) {
+            const results = [];
+            // Range: "1-5"
+            const rangeMatch = spec.match(/^(\d+)-(\d+)$/);
+            if (rangeMatch) {
+                const start = parseInt(rangeMatch[1]);
+                const end = parseInt(rangeMatch[2]);
+                for (let i = start; i <= end && i <= spaceships.length; i++) {
+                    results.push(spaceships[i - 1]);
+                }
+                return results;
+            }
+            // List: "1,3,5"
+            if (spec.includes(',')) {
+                spec.split(',').forEach(s => {
+                    const idx = parseInt(s.trim()) - 1;
+                    if (idx >= 0 && idx < spaceships.length) results.push(spaceships[idx]);
+                });
+                return results;
+            }
+            // "all"
+            if (spec.toLowerCase() === 'all') return [...spaceships];
+            // "selected"
+            if (spec.toLowerCase() === 'selected') return selectedObjects.filter(o => o.userData.type === 'spaceship');
+            // Single name/number
+            const num = parseInt(spec);
+            if (!isNaN(num) && num >= 1 && num <= spaceships.length) {
+                return [spaceships[num - 1]];
+            }
+            const ship = findShip(spec);
+            if (ship) return [ship];
+            return [];
+        }
+        
+        // Parse a position: [x,y,z] or "Ship-01" or "nearest_asteroid"
+        function parsePosition(str) {
+            str = str.trim();
+            // [x, y, z]
+            const arrMatch = str.match(/\[?\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]?/);
+            if (arrMatch) {
+                return new THREE.Vector3(parseFloat(arrMatch[1]), parseFloat(arrMatch[2]), parseFloat(arrMatch[3]));
+            }
+            // "nearest_asteroid"
+            if (str.toLowerCase().includes('nearest_asteroid')) {
+                // Find nearest asteroid to first selected ship or camera
+                const ref = (selectedObjects.length > 0) ? selectedObjects[0].position : cameraPosition;
+                let nearest = null, nearestDist = Infinity;
+                asteroids.forEach(a => {
+                    const d = a.position.distanceTo(ref);
+                    if (d < nearestDist) { nearestDist = d; nearest = a; }
+                });
+                return nearest ? nearest.position.clone() : new THREE.Vector3(0, 0, 0);
+            }
+            // Ship name
+            const ship = findShip(str);
+            if (ship) return ship.position.clone();
+            return null;
+        }
+        
+        // ===== DSL COMMAND PARSER AND EXECUTOR =====
+        
+        function parseDSL(line) {
+            const tokens = line.trim().split(/\s+/);
+            if (tokens.length === 0) return null;
+            
+            const cmd = tokens[0].toUpperCase();
+            
+            switch (cmd) {
+                case 'MOVE': {
+                    // MOVE <ships> TO <position>
+                    const toIdx = tokens.findIndex(t => t.toUpperCase() === 'TO');
+                    if (toIdx < 0) return { error: 'MOVE requires TO keyword' };
+                    const shipsSpec = tokens.slice(1, toIdx).join(' ');
+                    const posStr = tokens.slice(toIdx + 1).join(' ');
+                    const ships = findShips(shipsSpec);
+                    const pos = parsePosition(posStr);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
+                    if (!pos) return { error: `Invalid position: "${posStr}"` };
+                    return { cmd: 'MOVE', ships, target: pos };
+                }
+                case 'STOP': {
+                    // STOP <ships>
+                    const shipsSpec = tokens.slice(1).join(' ');
+                    const ships = findShips(shipsSpec || 'selected');
+                    if (ships.length === 0) return { error: 'No ships to stop' };
+                    return { cmd: 'STOP', ships };
+                }
+                case 'ORBIT': {
+                    // ORBIT <ships> AROUND <position> RADIUS <n>
+                    const aroundIdx = tokens.findIndex(t => t.toUpperCase() === 'AROUND');
+                    const radiusIdx = tokens.findIndex(t => t.toUpperCase() === 'RADIUS');
+                    if (aroundIdx < 0) return { error: 'ORBIT requires AROUND keyword' };
+                    const shipsSpec = tokens.slice(1, aroundIdx).join(' ');
+                    const posEnd = radiusIdx > 0 ? radiusIdx : tokens.length;
+                    const posStr = tokens.slice(aroundIdx + 1, posEnd).join(' ');
+                    const radius = radiusIdx > 0 ? parseFloat(tokens[radiusIdx + 1]) : 20;
+                    const ships = findShips(shipsSpec);
+                    const pos = parsePosition(posStr);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
+                    if (!pos) return { error: `Invalid position: "${posStr}"` };
+                    return { cmd: 'ORBIT', ships, center: pos, radius };
+                }
+                case 'PATROL': {
+                    // PATROL <ships> BETWEEN <pos1> AND <pos2>
+                    const betweenIdx = tokens.findIndex(t => t.toUpperCase() === 'BETWEEN');
+                    const andIdx = tokens.findIndex(t => t.toUpperCase() === 'AND');
+                    if (betweenIdx < 0 || andIdx < 0) return { error: 'PATROL requires BETWEEN ... AND ...' };
+                    const shipsSpec = tokens.slice(1, betweenIdx).join(' ');
+                    const pos1Str = tokens.slice(betweenIdx + 1, andIdx).join(' ');
+                    const pos2Str = tokens.slice(andIdx + 1).join(' ');
+                    const ships = findShips(shipsSpec);
+                    const pos1 = parsePosition(pos1Str);
+                    const pos2 = parsePosition(pos2Str);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
+                    if (!pos1 || !pos2) return { error: 'Invalid patrol positions' };
+                    return { cmd: 'PATROL', ships, pointA: pos1, pointB: pos2 };
+                }
+                case 'FOLLOW': {
+                    // FOLLOW <ships> TARGET <ship> DISTANCE <n>
+                    const targetIdx = tokens.findIndex(t => t.toUpperCase() === 'TARGET');
+                    const distIdx = tokens.findIndex(t => t.toUpperCase() === 'DISTANCE');
+                    if (targetIdx < 0) return { error: 'FOLLOW requires TARGET keyword' };
+                    const shipsSpec = tokens.slice(1, targetIdx).join(' ');
+                    const targetSpec = tokens.slice(targetIdx + 1, distIdx > 0 ? distIdx : tokens.length).join(' ');
+                    const distance = distIdx > 0 ? parseFloat(tokens[distIdx + 1]) : 10;
+                    const ships = findShips(shipsSpec);
+                    const targetShip = findShip(targetSpec);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
+                    if (!targetShip) return { error: `Target not found: "${targetSpec}"` };
+                    return { cmd: 'FOLLOW', ships, targetShip, distance };
+                }
+                case 'ATTACK': {
+                    // ATTACK <ships> TARGET <target>
+                    const targetIdx = tokens.findIndex(t => t.toUpperCase() === 'TARGET');
+                    if (targetIdx < 0) return { error: 'ATTACK requires TARGET keyword' };
+                    const shipsSpec = tokens.slice(1, targetIdx).join(' ');
+                    const targetSpec = tokens.slice(targetIdx + 1).join(' ');
+                    const ships = findShips(shipsSpec);
+                    const pos = parsePosition(targetSpec);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
+                    if (!pos) return { error: `Invalid target: "${targetSpec}"` };
+                    return { cmd: 'ATTACK', ships, target: pos };
+                }
+                default:
+                    return { error: `Unknown command: ${cmd}` };
+            }
+        }
+        
+        function executeDSL(parsed) {
+            if (parsed.error) {
+                addChatMsg(parsed.error, 'error');
+                return;
+            }
+            
+            parsed.ships.forEach((ship, i) => {
+                const data = ship.userData;
+                
+                switch (parsed.cmd) {
+                    case 'MOVE':
+                        data.behavior = {
+                            type: 'move',
+                            target: parsed.target.clone()
+                        };
+                        break;
+                    case 'STOP':
+                        data.behavior = null;
+                        data.velocity.set(0, 0, 0);
+                        break;
+                    case 'ORBIT':
+                        data.behavior = {
+                            type: 'orbit',
+                            center: parsed.center.clone(),
+                            radius: parsed.radius,
+                            angle: (i / parsed.ships.length) * Math.PI * 2,  // Spread ships evenly
+                            speed: 0.01
+                        };
+                        break;
+                    case 'PATROL':
+                        data.behavior = {
+                            type: 'patrol',
+                            pointA: parsed.pointA.clone(),
+                            pointB: parsed.pointB.clone(),
+                            goingToB: true
+                        };
+                        break;
+                    case 'FOLLOW':
+                        data.behavior = {
+                            type: 'follow',
+                            targetShip: parsed.targetShip,
+                            distance: parsed.distance
+                        };
+                        break;
+                    case 'ATTACK':
+                        data.behavior = {
+                            type: 'attack',
+                            target: parsed.target.clone()
+                        };
+                        break;
+                }
+            });
+            
+            addChatMsg(`Executing ${parsed.cmd} for ${parsed.ships.length} ship${parsed.ships.length > 1 ? 's' : ''}`);
+        }
+        
+        // ===== BEHAVIOR ENGINE (runs per frame per ship) =====
+        
+        function updateShipBehaviors() {
+            const BEHAVIOR_SPEED = 0.15;
+            const ARRIVAL_THRESHOLD = 2;
+            
+            spaceships.forEach(ship => {
+                const data = ship.userData;
+                if (!data.behavior) return;
+                
+                const b = data.behavior;
+                
+                switch (b.type) {
+                    case 'move': {
+                        const dir = b.target.clone().sub(ship.position);
+                        dir.y = 0;  // Keep on plane? No, 3D movement
+                        const dist = dir.length();
+                        if (dist > ARRIVAL_THRESHOLD) {
+                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                            data.velocity.lerp(dir, 0.05);
+                            // Consume fuel
+                            if (data.fuel > 0) {
+                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
+                                data.isAccelerating = true;
+                            }
+                        } else {
+                            // Arrived
+                            data.velocity.multiplyScalar(0.9);
+                            if (data.velocity.length() < 0.01) {
+                                data.velocity.set(0, 0, 0);
+                                data.behavior = null;
+                            }
+                        }
+                        break;
+                    }
+                    case 'orbit': {
+                        b.angle += b.speed;
+                        const targetPos = new THREE.Vector3(
+                            b.center.x + Math.cos(b.angle) * b.radius,
+                            b.center.y,
+                            b.center.z + Math.sin(b.angle) * b.radius
+                        );
+                        const dir = targetPos.clone().sub(ship.position);
+                        dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                        data.velocity.lerp(dir, 0.08);
+                        if (data.fuel > 0) {
+                            data.fuel -= ACCELERATION_FUEL_COST * 0.05;
+                        }
+                        break;
+                    }
+                    case 'patrol': {
+                        const target = b.goingToB ? b.pointB : b.pointA;
+                        const dir = target.clone().sub(ship.position);
+                        const dist = dir.length();
+                        if (dist > ARRIVAL_THRESHOLD) {
+                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                            data.velocity.lerp(dir, 0.05);
+                            if (data.fuel > 0) {
+                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
+                            }
+                        } else {
+                            // Flip direction
+                            b.goingToB = !b.goingToB;
+                        }
+                        break;
+                    }
+                    case 'follow': {
+                        if (!b.targetShip) { data.behavior = null; break; }
+                        const targetPos = b.targetShip.position.clone();
+                        const dir = targetPos.clone().sub(ship.position);
+                        const dist = dir.length();
+                        if (dist > b.distance) {
+                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                            data.velocity.lerp(dir, 0.05);
+                            if (data.fuel > 0) {
+                                data.fuel -= ACCELERATION_FUEL_COST * 0.08;
+                            }
+                        } else {
+                            data.velocity.multiplyScalar(0.95);
+                        }
+                        break;
+                    }
+                    case 'attack': {
+                        // Move toward target then fire when close
+                        const dir = b.target.clone().sub(ship.position);
+                        const dist = dir.length();
+                        if (dist > 30) {
+                            dir.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                            data.velocity.lerp(dir, 0.05);
+                            if (data.fuel > 0) {
+                                data.fuel -= ACCELERATION_FUEL_COST * 0.1;
+                            }
+                        } else {
+                            // In range - slow down and fire
+                            data.velocity.multiplyScalar(0.95);
+                            // Fire periodically
+                            if (!b.lastFired || Date.now() - b.lastFired > 2000) {
+                                if (data.weapons > 0) {
+                                    // Find nearest asteroid to target
+                                    let nearest = null, nearestDist = Infinity;
+                                    asteroids.forEach(a => {
+                                        const d = a.position.distanceTo(b.target);
+                                        if (d < nearestDist) { nearestDist = d; nearest = a; }
+                                    });
+                                    if (nearest && nearestDist < 50) {
+                                        fireLaser(nearest);
+                                        data.weapons--;
+                                    }
+                                    b.lastFired = Date.now();
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+        
+        // ===== LLM INTEGRATION =====
+        
+        const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands.
+
+Available DSL commands:
+MOVE <ships> TO <position>
+STOP <ships>
+ORBIT <ships> AROUND <position> RADIUS <number>
+PATROL <ships> BETWEEN <position> AND <position>
+FOLLOW <ships> TARGET <ship_name> DISTANCE <number>
+ATTACK <ships> TARGET <position_or_nearest_asteroid>
+
+Ship references: Ship-01 through Ship-15, or ranges like 1-5, or "all", or "selected"
+Positions: [x, y, z] coordinates, ship names, or "nearest_asteroid"
+
+Rules:
+- Output ONLY the DSL commands, one per line
+- No explanation, no markdown, no extra text
+- Use realistic coordinates within range -250 to 250
+- If the order is unclear, output a single line starting with MSG: followed by a clarification question
+
+Examples:
+User: "send ships 1 through 5 to patrol between the origin and position 100,0,100"
+PATROL 1-5 BETWEEN [0,0,0] AND [100,0,100]
+
+User: "have all ships orbit the center"
+ORBIT all AROUND [0,0,0] RADIUS 30
+
+User: "stop everything"
+STOP all
+
+User: "ship 3 follow ship 1"
+FOLLOW Ship-03 TARGET Ship-01 DISTANCE 15`;
+
+        let LLM_API_KEY = localStorage.getItem('starfleet_api_key') || '';
+        
+        async function queryLLM(userMessage) {
+            if (!LLM_API_KEY) {
+                // Prompt for API key
+                LLM_API_KEY = prompt('Enter your OpenAI API key for Starfleet Computer:');
+                if (LLM_API_KEY) {
+                    localStorage.setItem('starfleet_api_key', LLM_API_KEY);
+                } else {
+                    return 'MSG: No API key provided. Set your OpenAI key to enable Starfleet Computer.';
+                }
+            }
+            
+            try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${LLM_API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        model: 'gpt-4o-mini',
+                        messages: [
+                            { role: 'system', content: DSL_SYSTEM_PROMPT },
+                            { role: 'user', content: userMessage }
+                        ],
+                        max_tokens: 200,
+                        temperature: 0.3
+                    })
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    if (response.status === 401) {
+                        LLM_API_KEY = '';
+                        localStorage.removeItem('starfleet_api_key');
+                        return 'MSG: Invalid API key. Please try again.';
+                    }
+                    return 'MSG: API error: ' + (err.error?.message || response.statusText);
+                }
+                
+                const data = await response.json();
+                return data.choices[0].message.content.trim();
+            } catch (e) {
+                return 'MSG: Connection error: ' + e.message;
+            }
+        }
+        
+        async function submitChat() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            input.value = '';
+            addChatMsg(text, 'user');
+            
+            // Check if it's a direct DSL command (starts with a known command)
+            const firstWord = text.split(/\s+/)[0].toUpperCase();
+            const DSL_COMMANDS = ['MOVE', 'STOP', 'ORBIT', 'PATROL', 'FOLLOW', 'ATTACK'];
+            
+            if (DSL_COMMANDS.includes(firstWord)) {
+                // Direct DSL input
+                addChatDSL(text);
+                const parsed = parseDSL(text);
+                executeDSL(parsed);
+            } else {
+                // Natural language - send to LLM
+                addChatMsg('Processing...', 'computer');
+                const dslResponse = await queryLLM(text);
+                
+                // Remove "Processing..." message
+                const log = document.getElementById('chat-log');
+                log.removeChild(log.lastChild);
+                
+                // Handle response
+                const lines = dslResponse.split('\n').filter(l => l.trim());
+                for (const line of lines) {
+                    if (line.startsWith('MSG:')) {
+                        addChatMsg(line.substring(4).trim(), 'computer');
+                    } else {
+                        addChatDSL(line);
+                        const parsed = parseDSL(line);
+                        executeDSL(parsed);
+                    }
+                }
+            }
+        }
     </script>
 </body>
 </html>
