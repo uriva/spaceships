@@ -2749,6 +2749,73 @@
             }
         }
         
+        function updateProximityWireframe() {
+            // Check all objects - if camera is inside, switch to wireframe
+            const allObjects = [...asteroids];
+            
+            // Also check celestial bodies (suns and planets)
+            if (starField && starField.celestialBodies) {
+                allObjects.push(...starField.celestialBodies);
+            }
+            
+            allObjects.forEach(obj => {
+                if (!obj.geometry) return;
+                
+                // Calculate bounding radius (accounting for scale)
+                obj.geometry.computeBoundingSphere();
+                const geoRadius = obj.geometry.boundingSphere.radius;
+                const maxScale = Math.max(obj.scale.x, obj.scale.y, obj.scale.z);
+                const worldRadius = geoRadius * maxScale;
+                
+                const dist = cameraPosition.distanceTo(obj.position);
+                const isInside = dist < worldRadius * 1.1;  // Slightly larger threshold
+                
+                if (isInside && !obj.userData._isWireframe) {
+                    // Switch to wireframe
+                    obj.userData._origMaterial = obj.material;
+                    obj.material = new THREE.MeshBasicMaterial({
+                        color: obj.userData._origMaterial.color || 0x44aaff,
+                        wireframe: true,
+                        transparent: true,
+                        opacity: 0.3
+                    });
+                    obj.userData._isWireframe = true;
+                } else if (!isInside && obj.userData._isWireframe) {
+                    // Restore original material
+                    obj.material = obj.userData._origMaterial;
+                    obj.userData._isWireframe = false;
+                }
+            });
+            
+            // Also handle ships
+            spaceships.forEach(ship => {
+                const dist = cameraPosition.distanceTo(ship.position);
+                const isInside = dist < 2;  // Ship radius ~2 units
+                
+                if (isInside && !ship.userData._isWireframe) {
+                    ship.children.forEach(child => {
+                        if (child.material && !child.name.includes('nav') && !child.name.includes('selection') && !child.name.includes('antenna')) {
+                            child.userData._origMaterial = child.material;
+                            child.material = new THREE.MeshBasicMaterial({
+                                color: 0x44aaff,
+                                wireframe: true,
+                                transparent: true,
+                                opacity: 0.3
+                            });
+                        }
+                    });
+                    ship.userData._isWireframe = true;
+                } else if (!isInside && ship.userData._isWireframe) {
+                    ship.children.forEach(child => {
+                        if (child.userData._origMaterial) {
+                            child.material = child.userData._origMaterial;
+                        }
+                    });
+                    ship.userData._isWireframe = false;
+                }
+            });
+        }
+        
         function animate() {
             requestAnimationFrame(animate);
             
@@ -2762,6 +2829,7 @@
             updateLasers();
             updateStarField();
             updateBoundarySphere();
+            updateProximityWireframe();
             updateShipHUD();
             
             renderer.render(scene, camera);
