@@ -2899,18 +2899,26 @@
                 }
                 return results;
             }
-            // List: "1,3,5"
+            // Comma-separated list: "Ship-01, Ship-02, Ship-03" or "1,3,5"
             if (spec.includes(',')) {
                 spec.split(',').forEach(s => {
-                    const idx = parseInt(s.trim()) - 1;
-                    if (idx >= 0 && idx < spaceships.length) results.push(spaceships[idx]);
+                    s = s.trim();
+                    // Try as number first
+                    const num = parseInt(s);
+                    if (!isNaN(num) && num >= 1 && num <= spaceships.length) {
+                        results.push(spaceships[num - 1]);
+                    } else {
+                        // Try as ship name
+                        const ship = findShip(s);
+                        if (ship && !results.includes(ship)) results.push(ship);
+                    }
                 });
                 return results;
             }
-            // "all"
-            if (spec.toLowerCase() === 'all') return [...spaceships];
+            // "all" or "all ships"
+            if (spec.toLowerCase() === 'all' || spec.toLowerCase() === 'all ships') return [...spaceships];
             // "selected"
-            if (spec.toLowerCase() === 'selected') return selectedObjects.filter(o => o.userData.type === 'spaceship');
+            if (spec.toLowerCase() === 'selected' || spec.toLowerCase() === 'selected ships') return selectedObjects.filter(o => o.userData.type === 'spaceship');
             // Single name/number
             const num = parseInt(spec);
             if (!isNaN(num) && num >= 1 && num <= spaceships.length) {

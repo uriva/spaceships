@@ -37,13 +37,16 @@ PATROL <ships> BETWEEN [x, y, z] AND [x, y, z]
 FOLLOW <ships> TARGET <ship_name> DISTANCE <number>
 ATTACK <ships> TARGET <position_or_nearest_asteroid>
 
+For questions/info requests, use MSG: prefix to respond in plain text.
+The [CONTEXT] block has live ship data - use it to answer questions about fuel, position, status, etc.
+
 Ship references: Ship-01 through Ship-15, or ranges like 1-5, or "all", or "selected"
 Positions: [x, y, z] coordinates, ship names, or "nearest_asteroid"
 
 Rules:
-- Output ONLY the DSL commands, one per line
-- No explanation, no markdown, no extra text
-- NEVER ask questions. Always use reasonable defaults:
+- For COMMANDS: output ONLY DSL commands, one per line
+- For QUESTIONS about ship status/fuel/position: output MSG: followed by your answer using the CONTEXT data
+- NEVER ask clarifying questions. Always use sensible defaults:
   - "the center" = [0, 0, 0]
   - "orbit" without radius = RADIUS 30
   - "patrol" without positions = use [0,0,0] and a sensible far point like [150,0,150]
@@ -124,7 +127,24 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       },
     });
 
-    const text = response.text?.trim() || "MSG: No response from Gemini";
+    // Try multiple ways to extract text from response
+    let text = "";
+    try {
+      text = response.text?.trim() || "";
+    } catch (_) {
+      // fallback
+    }
+    if (!text) {
+      try {
+        text = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+      } catch (_) {
+        // fallback
+      }
+    }
+    if (!text) {
+      console.error("Empty response from Gemini. Full response:", JSON.stringify(response));
+      text = "MSG: Starfleet Computer is processing. Please try again.";
+    }
 
     return new Response(
       JSON.stringify({ dsl: text }),
