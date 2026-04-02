@@ -605,11 +605,9 @@
         
         // Ship physics (corvette-class, ~200m, 50,000 tonnes)
         const MAX_FUEL = 500;               // 500 tonnes of propellant
-        const ACCELERATION_FUEL_COST = 0.4; // tonnes per burn frame
-        const DECELERATION_FUEL_COST = 0.25;// tonnes per brake frame
+        const FUEL_COST_PER_FRAME = 0.4;    // tonnes per thrust frame (accel or brake — same engine)
         const MAX_SPEED = 0.5;              // 0.5 units/frame = ~5 km/s
-        const ACCELERATION = 0.015;         // ~0.15 km/s² (2 MN thrust on 50kt)
-        const DECELERATION = 0.008;         // passive drag
+        const THRUST = 0.015;               // engine thrust as acceleration: ~0.15 km/s² (2 MN on 50kt)
         const SHIP_MASS = 50000;            // tonnes
         const WEAPON_CHARGES = 100;         // laser capacitor charges
         const G_REAL = 6.674e-11;           // real gravitational constant (m³/(kg·s²))
@@ -2643,23 +2641,23 @@
                 
                 // Apply physics: accelerate toward target velocity
                 if (data.isAccelerating && hasFuel) {
-                    // Accelerate
-                    const acceleration = data.targetVelocity.clone().sub(data.velocity).normalize().multiplyScalar(ACCELERATION);
+                    // Thrust toward target velocity
+                    const acceleration = data.targetVelocity.clone().sub(data.velocity).normalize().multiplyScalar(THRUST);
                     data.velocity.add(acceleration);
                     if (data.velocity.length() > MAX_SPEED) {
                         data.velocity.normalize().multiplyScalar(MAX_SPEED);
                     }
-                    // Consume fuel for acceleration
-                    data.fuel = Math.max(0, data.fuel - ACCELERATION_FUEL_COST);
+                    data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
                 } else if (data.isBraking && hasFuel) {
-                    // Active braking consumes less fuel than acceleration
-                    const brakeDir = data.velocity.clone().normalize().multiplyScalar(-DECELERATION * 2);
-                    data.velocity.add(brakeDir);
-                    if (data.velocity.length() < 0.01) {
+                    // Reverse thrust — same engine, same power, same fuel cost
+                    if (speed <= THRUST) {
+                        // Would overshoot zero — clamp (physically correct: cut engines at zero)
                         data.velocity.set(0, 0, 0);
+                    } else {
+                        const brakeDir = data.velocity.clone().normalize().multiplyScalar(-THRUST);
+                        data.velocity.add(brakeDir);
                     }
-                    // Consume minimal fuel for braking
-                    data.fuel = Math.max(0, data.fuel - DECELERATION_FUEL_COST);
+                    data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
                 } else {
                     // No thrust — in space, velocity is preserved (no drag)
                 }
@@ -3454,7 +3452,7 @@
         function updateShipBehaviors() {
             const BEHAVIOR_SPEED = 0.15;
             const ARRIVAL_THRESHOLD = 2;
-            const EFFECTIVE_BRAKE = DECELERATION * 2;
+            const EFFECTIVE_BRAKE = THRUST;  // braking is same engine as acceleration
             
             spaceships.forEach(ship => {
                 const data = ship.userData;
@@ -3470,8 +3468,7 @@
                         const dir = b.target.clone().sub(ship.position);
                         const dist = dir.length();
                         if (dist < ARRIVAL_THRESHOLD && speed < 0.02) {
-                            // Arrived and stopped
-                            data.velocity.set(0, 0, 0);
+                            // Arrived — physics brought us to rest, clear behavior
                             data.behavior = null;
                         } else if (dist > brakeDist) {
                             // Accelerate toward target
@@ -3485,7 +3482,7 @@
                     }
                     case 'brake': {
                         if (speed < 0.02) {
-                            data.velocity.set(0, 0, 0);
+                            // Physics brought us to rest, clear behavior
                             data.behavior = null;
                         } else {
                             data.isBraking = true;
