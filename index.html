@@ -287,7 +287,6 @@
                 0 0 20px rgba(0, 255, 255, 0.5),
                 inset 0 0 20px rgba(0, 255, 255, 0.1);
         }
-        }
         
         /* Target Marker */
         .target-marker {
@@ -605,9 +604,7 @@
         <p class="scroll" style="color: #ff5555; font-size: 10px;">Camera cannot leave the boundary sphere</p>
     </div>
     
-    <div class="selection-indicator" id="selection-indicator">
-        <div class="selection-ring"></div>
-    </div>
+    <div id="selection-indicators"></div>
     
     <div class="selection-box" id="selection-box"></div>
     
@@ -635,9 +632,17 @@
         let mouse = new THREE.Vector2();
         let starField;
         
-        // 3D cursor beams
-        let cursorBeamX, cursorBeamZ, cursorPos3D = new THREE.Vector3();
+        // 3D cursor beams — position stored as spherical coords
+        let cursorBeamX, cursorBeamZ, cursorBeamY, cursorOrb, cursorOrbSurface, cursorOrbSurfaceBack, cursorOrbX, cursorOrbZ, cursorOrbY, cursorOrbXn, cursorOrbZn, cursorOrbYn, cursorPos3D = new THREE.Vector3();
         const WORLD_RADIUS = 500;
+        // Cursor direction (unit vector) + local up + radius — no spherical coords, no pole singularity
+        let cursorDir = new THREE.Vector3(0, 0, 1).normalize();  // initial direction
+        let cursorUp = new THREE.Vector3(0, 1, 0);               // local "up" for cursor — avoids pole lock
+        let cursorRadius = 250;          // half-way out
+        let cursorRadialDir = 1;         // +1 or -1, flips at sphere boundary so Z/X wrap through
+        let cursorKeyArrows = {};        // direction arrows on primary surface orb
+        let cursorKeyArrowsBack = {};   // direction arrows on opposite surface orb
+        let cursorKeyArrowsCross = {};  // Z/X arrows on crosshair orb
         
         // Ship data
         let spaceships = [];
@@ -677,7 +682,7 @@
         let isMoving = false;
         
         // Camera control
-        let cameraPosition = new THREE.Vector3(40, 30, 40);
+        let cameraPosition = new THREE.Vector3(400, 300, 400);
         let cameraTarget = new THREE.Vector3(0, 0, 0);
         let cameraUpVector = new THREE.Vector3(0, 1, 0);  // Track up vector separately
         let targetCameraPosition = new THREE.Vector3(40, 30, 40);
@@ -688,14 +693,14 @@
         let dragStart = { x: 0, y: 0 };
         let cameraDistance = 60;
         
-        // Smooth zoom tracking
-        let targetCameraDistance = 60;
-        let currentCameraDistance = 60;
-        const ZOOM_LERP_FACTOR = 0.15;
+        
         
         // Keyboard controls
-        let keys = { w: false, a: false, s: false, d: false, space: false, z: false, x: false, shift: false };
-        const CAMERA_MOVE_SPEED = 0.8;
+        let keys = { w: false, a: false, s: false, d: false, space: false, shift: false, z: false, x: false };
+        const CAMERA_MOVE_SPEED_MIN = 0.8;
+        const CAMERA_MOVE_SPEED_MAX = 6.0;
+        const CAMERA_ACCEL_FRAMES = 90;  // frames to reach max speed
+        let cameraMoveHeldFrames = 0;
         const WORLD_BOUNDARY = 500;
         
         // Double-tap tracking for L key
@@ -780,19 +785,104 @@
             createBoundarySphere();
             
             // 3D cursor beams — two red lines from engagement sphere edges
-            const beamMat = new THREE.LineBasicMaterial({ color: 0xff2200, transparent: true, opacity: 0.35 });
+            const beamMatX = new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.35 });
+            const beamMatZ = new THREE.LineBasicMaterial({ color: 0x33ff33, transparent: true, opacity: 0.35 });
+            const beamMatY = new THREE.LineBasicMaterial({ color: 0x3388ff, transparent: true, opacity: 0.35 });
             const beamGeoX = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(-WORLD_RADIUS, 0, 0), new THREE.Vector3(WORLD_RADIUS, 0, 0)
             ]);
             const beamGeoZ = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(0, 0, -WORLD_RADIUS), new THREE.Vector3(0, 0, WORLD_RADIUS)
             ]);
-            cursorBeamX = new THREE.Line(beamGeoX, beamMat);
-            cursorBeamZ = new THREE.Line(beamGeoZ, beamMat);
+            const beamGeoY = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, -WORLD_RADIUS, 0), new THREE.Vector3(0, WORLD_RADIUS, 0)
+            ]);
+            cursorBeamX = new THREE.Line(beamGeoX, beamMatX);
+            cursorBeamZ = new THREE.Line(beamGeoZ, beamMatZ);
+            cursorBeamY = new THREE.Line(beamGeoY, beamMatY);
             cursorBeamX.frustumCulled = false;
             cursorBeamZ.frustumCulled = false;
+            cursorBeamY.frustumCulled = false;
             scene.add(cursorBeamX);
             scene.add(cursorBeamZ);
+            scene.add(cursorBeamY);
+            // Inner orb at crosshair position (radius-controlled)
+            const orbGeo = new THREE.SphereGeometry(1.5, 16, 16);
+            const orbMat = new THREE.MeshBasicMaterial({ color: 0xff4422, transparent: true, opacity: 0.7 });
+            cursorOrb = new THREE.Mesh(orbGeo, orbMat);
+            cursorOrb.frustumCulled = false;
+            scene.add(cursorOrb);
+            // Surface orb on the engagement sphere (lat/lon controlled)
+            const surfOrbGeo = new THREE.SphereGeometry(5, 16, 16);
+            const surfOrbMat = new THREE.MeshBasicMaterial({ color: 0xff6644, transparent: true, opacity: 0.45 });
+            cursorOrbSurface = new THREE.Mesh(surfOrbGeo, surfOrbMat);
+            cursorOrbSurface.frustumCulled = false;
+            scene.add(cursorOrbSurface);
+            // Opposite-side surface orb (where Z/X wraps to)
+            const surfOrbBackMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3 });
+            cursorOrbSurfaceBack = new THREE.Mesh(surfOrbGeo, surfOrbBackMat);
+            cursorOrbSurfaceBack.frustumCulled = false;
+            scene.add(cursorOrbSurfaceBack);
+            // Axis endpoint orbs where beams hit the sphere
+            const axOrbGeo = new THREE.SphereGeometry(1.8, 12, 12);
+            cursorOrbX = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.5 }));
+            cursorOrbZ = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0x33ff33, transparent: true, opacity: 0.5 }));
+            cursorOrbY = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0x3388ff, transparent: true, opacity: 0.5 }));
+            cursorOrbX.frustumCulled = false;
+            cursorOrbZ.frustumCulled = false;
+            cursorOrbY.frustumCulled = false;
+            scene.add(cursorOrbX);
+            scene.add(cursorOrbZ);
+            scene.add(cursorOrbY);
+            // Negative-side axis endpoint orbs
+            cursorOrbXn = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.5 }));
+            cursorOrbZn = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0x33ff33, transparent: true, opacity: 0.5 }));
+            cursorOrbYn = new THREE.Mesh(axOrbGeo, new THREE.MeshBasicMaterial({ color: 0x3388ff, transparent: true, opacity: 0.5 }));
+            cursorOrbXn.frustumCulled = false;
+            cursorOrbZn.frustumCulled = false;
+            cursorOrbYn.frustumCulled = false;
+            scene.add(cursorOrbXn);
+            scene.add(cursorOrbZn);
+            scene.add(cursorOrbYn);
+            // Key direction arrows on surface orb (Shift+WASD/ZX indicators)
+            function createKeyArrow(label) {
+                const group = new THREE.Group();
+                const color = 0xffaa44;
+                const shaftGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 16, 0)
+                ]);
+                group.add(new THREE.Line(shaftGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 })));
+                const cone = new THREE.Mesh(
+                    new THREE.ConeGeometry(2, 5, 8),
+                    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 })
+                );
+                cone.position.y = 19;
+                group.add(cone);
+                const canvas = document.createElement('canvas');
+                canvas.width = 64; canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+                ctx.font = 'bold 44px monospace';
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(label, 32, 32);
+                const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: new THREE.CanvasTexture(canvas), transparent: true, opacity: 0.7
+                }));
+                sprite.scale.set(8, 8, 1);
+                sprite.position.y = 26;
+                group.add(sprite);
+                group.traverse(child => { child.frustumCulled = false; });
+                return group;
+            }
+            ['W','S','A','D','Z','X'].forEach(key => {
+                cursorKeyArrows[key] = createKeyArrow(key);
+                scene.add(cursorKeyArrows[key]);
+                cursorKeyArrowsBack[key] = createKeyArrow(key);
+                scene.add(cursorKeyArrowsBack[key]);
+            });
+            // Initialize crosshair Cartesian position from direction vector
+            cursorPos3D.copy(cursorDir).multiplyScalar(cursorRadius);
             
             // Event listeners
             window.addEventListener('resize', onWindowResize, false);
@@ -1966,22 +2056,43 @@
         }
         
         function createBoundarySphere() {
-            const worldRadius = 500;
+            const R = 500;
+            const segments = 64;
+            const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15 });
+            const group = new THREE.Group();
+            group.name = 'boundarySphere';
             
-            // Main boundary sphere - sparse wireframe so it reads as a sphere not cylinder
-            const sphereGeometry = new THREE.SphereGeometry(worldRadius, 32, 32);
-            const sphereMaterial = new THREE.MeshBasicMaterial({
-                color: 0x00ffff,
-                wireframe: true,
-                transparent: true,
-                opacity: 0.06
-            });
-            const boundarySphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-            boundarySphere.name = 'boundarySphere';
-            scene.add(boundarySphere);
+            // Longitude lines (meridians) — circles around Y axis
+            const lonCount = 24;
+            for (let i = 0; i < lonCount; i++) {
+                const phi = (i / lonCount) * Math.PI * 2;
+                const pts = [];
+                for (let j = 0; j <= segments; j++) {
+                    const theta = (j / segments) * Math.PI;
+                    pts.push(new THREE.Vector3(
+                        R * Math.sin(theta) * Math.sin(phi),
+                        R * Math.cos(theta),
+                        R * Math.sin(theta) * Math.cos(phi)
+                    ));
+                }
+                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+            }
             
-            // Store for animation
-            boundarySphere.userData = {};
+            // Latitude lines (parallels) — horizontal rings
+            const latCount = 12;
+            for (let i = 1; i < latCount; i++) {
+                const theta = (i / latCount) * Math.PI;
+                const r = R * Math.sin(theta);
+                const y = R * Math.cos(theta);
+                const pts = [];
+                for (let j = 0; j <= segments; j++) {
+                    const phi = (j / segments) * Math.PI * 2;
+                    pts.push(new THREE.Vector3(r * Math.sin(phi), y, r * Math.cos(phi)));
+                }
+                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+            }
+            
+            scene.add(group);
         }
         
         function updateCameraPosition() {
@@ -2055,34 +2166,18 @@
                 lastLPressTime = now;
             }
             
-            // Z/X keys for zoom (any keyboard layout)
-            if (key === 'z' || code === 'KeyZ') {
-                keys.z = true;
-            }
-            if (key === 'x' || code === 'KeyX') {
-                keys.x = true;
-            }
+            if (key === 'z' || code === 'KeyZ') keys.z = true;
+            if (key === 'x' || code === 'KeyX') keys.x = true;
             
             // TAB to cycle through objects, SHIFT+TAB to cycle back
             if (code === 'Tab') {
                 cycleSelection(event.shiftKey ? -1 : 1);
             }
-        }
-        
-        function handleZoomInput() {
-            // Sync current distance from actual camera position (so Z/X doesn't snap)
-            const actualDistance = cameraPosition.distanceTo(cameraTarget);
-            if (!keys.z && !keys.x) {
-                targetCameraDistance = actualDistance;
-                currentCameraDistance = actualDistance;
-            }
             
-            // Continuous zoom while keys are held
-            if (keys.z) {
-                zoomCamera(1);  // Zoom in
-            }
-            if (keys.x) {
-                zoomCamera(-1); // Zoom out
+            // / to focus chat input
+            if (key === '/' || code === 'Slash') {
+                event.preventDefault();
+                document.getElementById('chat-input').focus();
             }
         }
         
@@ -2414,29 +2509,6 @@
             updateCameraPosition();
         }
         
-        function zoomCamera(direction) {
-            // direction: -1 for zoom out, 1 for zoom in
-            const zoomStep = 4;
-            targetCameraDistance = Math.max(5, targetCameraDistance - direction * zoomStep);
-        }
-        
-        function applySmoothZoom() {
-            // Only apply when Z/X keys are actively held
-            if (!keys.z && !keys.x) return;
-            if (Math.abs(targetCameraDistance - currentCameraDistance) < 0.01) return;
-            
-            // Lerp current distance toward target
-            currentCameraDistance += (targetCameraDistance - currentCameraDistance) * ZOOM_LERP_FACTOR;
-            
-            // Calculate the direction from target to current position
-            const direction = new THREE.Vector3().subVectors(cameraPosition, cameraTarget).normalize();
-            
-            // Apply the smoothed distance
-            const newPosition = cameraTarget.clone().add(direction.multiplyScalar(currentCameraDistance));
-            
-            cameraPosition.copy(newPosition);
-            updateCameraPosition();
-        }
         
         function selectShip(index) {
             deselectAll();
@@ -2511,29 +2583,38 @@
             selectedShipIndex = -1;
             selectedObject = null;
             selectedObjects = [];
-            document.getElementById('selection-indicator').style.display = 'none';
+            document.getElementById('selection-indicators').innerHTML = '';
         }
         
         function updateSelectionIndicator() {
-            const indicator = document.getElementById('selection-indicator');
-            if (selectedObject) {
-                const vector = selectedObject.position.clone();
+            const container = document.getElementById('selection-indicators');
+            
+            // Ensure we have the right number of indicator divs
+            while (container.children.length < selectedObjects.length) {
+                const div = document.createElement('div');
+                div.className = 'selection-indicator';
+                div.innerHTML = '<div class="selection-ring"></div>';
+                container.appendChild(div);
+            }
+            while (container.children.length > selectedObjects.length) {
+                container.removeChild(container.lastChild);
+            }
+            
+            selectedObjects.forEach((obj, i) => {
+                const indicator = container.children[i];
+                const vector = obj.position.clone();
                 vector.project(camera);
                 
-                // Only show if in front of camera
                 if (vector.z < 1) {
                     const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
                     const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
-                    
                     indicator.style.display = 'block';
                     indicator.style.left = (x - 30) + 'px';
                     indicator.style.top = (y - 30) + 'px';
                 } else {
                     indicator.style.display = 'none';
                 }
-            } else {
-                indicator.style.display = 'none';
-            }
+            });
         }
         
         function moveShipTo(position) {
@@ -3177,73 +3258,106 @@
                 isCameraTransitioning = false;
             }
             
-            // Shift+WASD: move the crosshair on the Y=0 plane
-            if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d)) {
-                const speed = 2.5;
-                // Camera-relative directions projected onto XZ plane
-                const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-                fwd.y = 0; fwd.normalize();
-                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-                right.y = 0; right.normalize();
+            // Shift+keys: move crosshair — rotate direction vector using local up, passes through poles
+            // W/S → pitch (rotate around local right axis), A/D → yaw (rotate around cursorUp)
+            // Z/X → radius in/out
+            if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x)) {
+                const angularSpeed = 0.025;  // radians per frame
+                const radialSpeed = 3;       // units per frame
                 
-                if (keys.w) cursorPos3D.addScaledVector(fwd, speed);
-                if (keys.s) cursorPos3D.addScaledVector(fwd, -speed);
-                if (keys.d) cursorPos3D.addScaledVector(right, speed);
-                if (keys.a) cursorPos3D.addScaledVector(right, -speed);
+                // W/S: pitch — rotate cursorDir and cursorUp around local right axis
+                if (keys.w || keys.s) {
+                    const right = new THREE.Vector3().crossVectors(cursorDir, cursorUp).normalize();
+                    const angle = keys.w ? angularSpeed : -angularSpeed;
+                    cursorDir.applyAxisAngle(right, angle).normalize();
+                    cursorUp.applyAxisAngle(right, angle).normalize();
+                }
                 
-                // Clamp to engagement sphere
-                if (cursorPos3D.length() > WORLD_RADIUS) cursorPos3D.setLength(WORLD_RADIUS);
-                cursorPos3D.y = 0; // stay on ground plane
+                // A/D: yaw — rotate cursorDir around cursorUp
+                if (keys.a || keys.d) {
+                    const angle = keys.a ? angularSpeed : -angularSpeed;
+                    cursorDir.applyAxisAngle(cursorUp, angle).normalize();
+                }
+                
+                if (keys.z) cursorRadius += radialSpeed * cursorRadialDir;
+                if (keys.x) cursorRadius -= radialSpeed * cursorRadialDir;
+                // Pass through sphere boundary or center: flip direction and reverse radial control
+                if (cursorRadius > WORLD_RADIUS) {
+                    cursorRadius = 2 * WORLD_RADIUS - cursorRadius;
+                    cursorDir.negate();
+                    cursorUp.negate();
+                    cursorRadialDir *= -1;
+                }
+                if (cursorRadius < 0) {
+                    cursorRadius = -cursorRadius;
+                    cursorDir.negate();
+                    cursorUp.negate();
+                    cursorRadialDir *= -1;
+                }
+                cursorRadius = Math.max(0, Math.min(WORLD_RADIUS, cursorRadius)); // safety clamp
+                
+                // Update Cartesian position
+                cursorPos3D.copy(cursorDir).multiplyScalar(cursorRadius);
                 return; // don't move camera
             }
             
             if (keys.space) {
-                // SPHERE WALKING with tracked up vector
-                const orbitSpeed = 0.03;
-                const offset = new THREE.Vector3().subVectors(cameraPosition, cameraTarget);
+                // Polar look rotation — W/S pitch, A/D yaw, using cameraUpVector (no worldY, no pole lock)
+                isCameraTransitioning = false;
+                if (keys.w || keys.a || keys.s || keys.d) {
+                    cameraMoveHeldFrames++;
+                } else {
+                    cameraMoveHeldFrames = 0;
+                }
+                const t = Math.min(cameraMoveHeldFrames / 150, 1);
+                const lookSpeed = 0.003 + t * 0.027;
+                const lookDir = new THREE.Vector3().subVectors(cameraTarget, cameraPosition).normalize();
                 
-                // W/S: pitch - rotate around binormal (horizontal axis perpendicular to offset)
+                // W/S: pitch — rotate lookDir and cameraUpVector around local right axis
                 if (keys.w || keys.s) {
-                    const angle = keys.w ? orbitSpeed : -orbitSpeed;
-                    
-                    // Binormal = cross(offset, cameraUp) normalized
-                    const binormal = new THREE.Vector3().crossVectors(offset, cameraUpVector).normalize();
-                    
-                    // Rotate both offset AND up vector around binormal
-                    offset.applyAxisAngle(binormal, angle);
-                    cameraUpVector.applyAxisAngle(binormal, angle);
+                    const right = new THREE.Vector3().crossVectors(lookDir, cameraUpVector).normalize();
+                    const angle = keys.w ? -lookSpeed : lookSpeed;
+                    lookDir.applyAxisAngle(right, angle);
+                    cameraUpVector.applyAxisAngle(right, angle).normalize();
                 }
                 
-                // A/D: yaw - rotate around up vector
+                // A/D: yaw — rotate lookDir around cameraUpVector
                 if (keys.a || keys.d) {
-                    const angle = keys.a ? orbitSpeed : -orbitSpeed;
-                    
-                    // Rotate offset around camera's up vector
-                    offset.applyAxisAngle(cameraUpVector, angle);
+                    const angle = keys.a ? lookSpeed : -lookSpeed;
+                    lookDir.applyAxisAngle(cameraUpVector, angle);
                 }
                 
-                cameraPosition.copy(cameraTarget).add(offset);
+                // Keep cameraTarget at a fixed distance from camera
+                const dist = cameraPosition.distanceTo(cameraTarget) || 100;
+                cameraTarget.copy(cameraPosition).addScaledVector(lookDir, dist);
                 updateCameraPosition();
                 
             } else {
-                // Fly mode - move relative to camera orientation
+                // Fly mode - W/S up/down, A/D left/right, Z/X forward/back
                 let cameraMove = new THREE.Vector3(0, 0, 0);
                 
-                // Use camera's actual forward and right (not projected to XZ)
                 const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
                 const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+                const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
                 
-                if (keys.w) cameraMove.add(cameraForward);
-                if (keys.s) cameraMove.sub(cameraForward);
+                if (keys.w) cameraMove.add(cameraUp);
+                if (keys.s) cameraMove.sub(cameraUp);
                 if (keys.d) cameraMove.add(cameraRight);
                 if (keys.a) cameraMove.sub(cameraRight);
+                if (keys.z) cameraMove.add(cameraForward);
+                if (keys.x) cameraMove.sub(cameraForward);
                 
                 if (cameraMove.length() > 0) {
-                    cameraMove.normalize().multiplyScalar(CAMERA_MOVE_SPEED);
+                    cameraMoveHeldFrames++;
+                    const t = Math.min(cameraMoveHeldFrames / CAMERA_ACCEL_FRAMES, 1);
+                    const speed = CAMERA_MOVE_SPEED_MIN + t * (CAMERA_MOVE_SPEED_MAX - CAMERA_MOVE_SPEED_MIN);
+                    cameraMove.normalize().multiplyScalar(speed);
                     
                     cameraPosition.add(cameraMove);
                     cameraTarget.add(cameraMove);
                     updateCameraPosition();
+                } else {
+                    cameraMoveHeldFrames = 0;
                 }
             }
         }
@@ -3315,28 +3429,136 @@
             });
         }
         
-        // Update cursor beams — position at cursorPos3D on Y=0 plane
+        // Update cursor beams — L-shape from crosshair to positive sphere edge, plus orbs
         function updateCursorBeams() {
-            const cx = cursorPos3D.x, cz = cursorPos3D.z;
+            const cx = cursorPos3D.x, cy = cursorPos3D.y, cz = cursorPos3D.z;
+            const R2 = WORLD_RADIUS * WORLD_RADIUS;
             
-            // X beam runs through (cx, 0, cz) along X axis
-            const posX = cursorBeamX.geometry.attributes.position;
-            posX.setXYZ(0, -WORLD_RADIUS, 0, cz);
-            posX.setXYZ(1,  WORLD_RADIUS, 0, cz);
-            posX.needsUpdate = true;
+            // X beam: full cross from -X to +X sphere edge
+            const xExtent = R2 - cy * cy - cz * cz;
+            if (xExtent > 0) {
+                const xMax = Math.sqrt(xExtent);
+                const posX = cursorBeamX.geometry.attributes.position;
+                posX.setXYZ(0, -xMax, cy, cz);
+                posX.setXYZ(1,  xMax, cy, cz);
+                posX.needsUpdate = true;
+                cursorBeamX.visible = true;
+                cursorOrbX.position.set(xMax, cy, cz);
+                cursorOrbXn.position.set(-xMax, cy, cz);
+                cursorOrbX.visible = true;
+                cursorOrbXn.visible = true;
+            } else {
+                cursorBeamX.visible = false;
+                cursorOrbX.visible = false;
+                cursorOrbXn.visible = false;
+            }
             
-            // Z beam runs through (cx, 0, cz) along Z axis
-            const posZ = cursorBeamZ.geometry.attributes.position;
-            posZ.setXYZ(0, cx, 0, -WORLD_RADIUS);
-            posZ.setXYZ(1, cx, 0,  WORLD_RADIUS);
-            posZ.needsUpdate = true;
+            // Z beam: full cross from -Z to +Z sphere edge
+            const zExtent = R2 - cx * cx - cy * cy;
+            if (zExtent > 0) {
+                const zMax = Math.sqrt(zExtent);
+                const posZ = cursorBeamZ.geometry.attributes.position;
+                posZ.setXYZ(0, cx, cy, -zMax);
+                posZ.setXYZ(1, cx, cy,  zMax);
+                posZ.needsUpdate = true;
+                cursorBeamZ.visible = true;
+                cursorOrbZ.position.set(cx, cy, zMax);
+                cursorOrbZn.position.set(cx, cy, -zMax);
+                cursorOrbZ.visible = true;
+                cursorOrbZn.visible = true;
+            } else {
+                cursorBeamZ.visible = false;
+                cursorOrbZ.visible = false;
+                cursorOrbZn.visible = false;
+            }
+            
+            // Y beam: full cross from -Y to +Y sphere edge
+            const yExtent = R2 - cx * cx - cz * cz;
+            if (yExtent > 0) {
+                const yMax = Math.sqrt(yExtent);
+                const posY = cursorBeamY.geometry.attributes.position;
+                posY.setXYZ(0, cx, -yMax, cz);
+                posY.setXYZ(1, cx,  yMax, cz);
+                posY.needsUpdate = true;
+                cursorBeamY.visible = true;
+                cursorOrbY.position.set(cx, yMax, cz);
+                cursorOrbYn.position.set(cx, -yMax, cz);
+                cursorOrbY.visible = true;
+                cursorOrbYn.visible = true;
+            } else {
+                cursorBeamY.visible = false;
+                cursorOrbY.visible = false;
+                cursorOrbYn.visible = false;
+            }
+            
+            // Inner orb at crosshair (cursorPos3D)
+            cursorOrb.position.copy(cursorPos3D);
+            
+            // Surface orb — same direction, radius = WORLD_RADIUS
+            cursorOrbSurface.position.copy(cursorDir).multiplyScalar(WORLD_RADIUS);
+            // Opposite surface orb — antipodal point
+            cursorOrbSurfaceBack.position.copy(cursorDir).multiplyScalar(-WORLD_RADIUS);
+            
+            // Constant screen-size scaling for all orbs
+            const orbRefDist = 300;
+            function scaleOrb(orb) {
+                if (!orb.visible) return;
+                const d = cameraPosition.distanceTo(orb.position) || 1;
+                orb.scale.setScalar(d / orbRefDist);
+            }
+            scaleOrb(cursorOrb);
+            scaleOrb(cursorOrbSurface);
+            scaleOrb(cursorOrbSurfaceBack);
+            scaleOrb(cursorOrbX); scaleOrb(cursorOrbXn);
+            scaleOrb(cursorOrbZ); scaleOrb(cursorOrbZn);
+            scaleOrb(cursorOrbY); scaleOrb(cursorOrbYn);
+            
+            // Key direction arrows — only visible when Shift held, constant screen size
+            const showArrows = keys.shift && !keys.space;
+            const allArrows = [...Object.values(cursorKeyArrows), ...Object.values(cursorKeyArrowsBack)];
+            if (!showArrows) {
+                allArrows.forEach(a => a.visible = false);
+            } else {
+                allArrows.forEach(a => a.visible = true);
+                const surfPos = cursorOrbSurface.position;
+                const backPos = cursorOrbSurfaceBack.position;
+                const arrowRight = new THREE.Vector3().crossVectors(cursorDir, cursorUp).normalize();
+                const arrowUp = cursorUp.clone().normalize();
+                const zPushDir = cursorDir.clone().multiplyScalar(cursorRadialDir).normalize();
+                const baseOffset = 8;
+                const yUp = new THREE.Vector3(0, 1, 0);
+                // Scale arrows so they stay constant size on screen
+                const distFront = cameraPosition.distanceTo(surfPos) || 1;
+                const distBack = cameraPosition.distanceTo(backPos) || 1;
+                const refDist = 300;  // distance at which arrows are "normal" size
+                const scaleFront = distFront / refDist;
+                const scaleBack = distBack / refDist;
+                function orientArrow(arrow, origin, dir, s) {
+                    const offset = baseOffset * s;
+                    arrow.position.copy(origin).addScaledVector(dir, offset);
+                    arrow.quaternion.setFromUnitVectors(yUp, dir);
+                    arrow.scale.setScalar(s);
+                }
+                // Primary orb arrows
+                orientArrow(cursorKeyArrows.W, surfPos, arrowUp, scaleFront);
+                orientArrow(cursorKeyArrows.S, surfPos, arrowUp.clone().negate(), scaleFront);
+                orientArrow(cursorKeyArrows.D, surfPos, arrowRight, scaleFront);
+                orientArrow(cursorKeyArrows.A, surfPos, arrowRight.clone().negate(), scaleFront);
+                orientArrow(cursorKeyArrows.Z, surfPos, zPushDir, scaleFront);
+                orientArrow(cursorKeyArrows.X, surfPos, zPushDir.clone().negate(), scaleFront);
+                // Back orb arrows — WASD mirrored (opposite hemisphere), Z/X same (circular)
+                orientArrow(cursorKeyArrowsBack.W, backPos, arrowUp.clone().negate(), scaleBack);
+                orientArrow(cursorKeyArrowsBack.S, backPos, arrowUp, scaleBack);
+                orientArrow(cursorKeyArrowsBack.D, backPos, arrowRight.clone().negate(), scaleBack);
+                orientArrow(cursorKeyArrowsBack.A, backPos, arrowRight, scaleBack);
+                orientArrow(cursorKeyArrowsBack.Z, backPos, zPushDir, scaleBack);
+                orientArrow(cursorKeyArrowsBack.X, backPos, zPushDir.clone().negate(), scaleBack);
+            }
         }
         
         function animate() {
             requestAnimationFrame(animate);
             
-            handleZoomInput();
-            applySmoothZoom();
             applyCameraTransition();
             updateKeyboardControls();
             updateShipBehaviors();
@@ -3371,7 +3593,12 @@
             }
         });
         // Prevent game keys when typing in chat
-        chatInput.addEventListener('keydown', (e) => e.stopPropagation());
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                chatInput.blur();
+            }
+            e.stopPropagation();
+        });
         chatInput.addEventListener('keyup', (e) => e.stopPropagation());
         
         function addChatMsg(text, type = 'computer') {
@@ -3948,10 +4175,7 @@
             }
             
             // Camera position
-            ctx += `Camera at [${Math.round(cameraPosition.x)},${Math.round(cameraPosition.y)},${Math.round(cameraPosition.z)}]. `;
-            
-            // Crosshair position
-            ctx += `Crosshair at [${Math.round(cursorPos3D.x)},${Math.round(cursorPos3D.y)},${Math.round(cursorPos3D.z)}]. `;
+            ctx += `Player at [${Math.round(cursorPos3D.x)},${Math.round(cursorPos3D.y)},${Math.round(cursorPos3D.z)}]. `;
             
             // Ship positions, states, speed, and bearing
             const shipStates = spaceships.map(s => {
