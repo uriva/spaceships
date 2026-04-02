@@ -525,7 +525,7 @@
         <div class="status-value" id="mode-display">TACTICAL</div>
         <div style="margin-top: 10px; font-family: 'Orbitron', sans-serif; font-size: 9px; color: #888; letter-spacing: 1px;">
             <label for="gravity-slider">GRAVITY ×<span id="gravity-label">1e9</span></label>
-            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="18"
+            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="4"
                 style="width: 120px; display: block; margin-top: 4px; accent-color: #00ffff;">
         </div>
     </div>
@@ -617,7 +617,7 @@
         // G_game = G_real × (1000 kg/t) / (100 m/gu)³ / (60 frames/s)²
         //        = G_real × 1000 / 1e6 / 3600 = G_real × 2.778e-7
         const G_GAME = G_REAL * 1000 / 1e6 / 3600;  // ~1.854e-17 in game units
-        let gravityMultiplier = 1e9;        // ratio of effective G to real G (tunable via HUD)
+        let gravityMultiplier = 100;         // ratio of effective G to real G (tunable via HUD)
         const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
         
         // Ship movement
