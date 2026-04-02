@@ -4,6 +4,16 @@ const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 
 const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands. NEVER ask clarifying questions - use sensible defaults instead.
 
+Each message includes a [CONTEXT] block with:
+- Currently selected ships/objects (use these when user says "them", "those", "selected", "these ships")
+- Camera position (use as reference for "near me", "over there", "ahead")
+- All ship positions and their current behavior (idle, orbit, patrol, etc.)
+
+Use the context to resolve ambiguous references. For example:
+- "move them to the center" → move the selected ships
+- "send selected to patrol" → use the selected ship names
+- "orbit that asteroid" → use the asteroid position from context
+
 TERRITORY:
 - Engagement zone is a sphere of radius 500 units centered at [0, 0, 0]
 - 1 unit = 100 meters (0.1 km)
@@ -105,12 +115,12 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-2.5-flash",
       contents: userMessage,
       config: {
         systemInstruction: DSL_SYSTEM_PROMPT,
         temperature: 0.3,
-        maxOutputTokens: 1000,
+        maxOutputTokens: 2000,
       },
     });
 

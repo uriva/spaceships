@@ -3213,12 +3213,44 @@
         
         const BACKEND_URL = 'https://spaceships.uriva.deno.net';
         
+        function buildContext() {
+            // Build a context string describing current game state
+            let ctx = '';
+            
+            // Selected objects
+            if (selectedObjects.length > 0) {
+                const selNames = selectedObjects.map(o => {
+                    if (o.userData.type === 'spaceship') return o.userData.name;
+                    return 'Asteroid at [' + Math.round(o.position.x) + ',' + Math.round(o.position.y) + ',' + Math.round(o.position.z) + ']';
+                });
+                ctx += `Currently selected: ${selNames.join(', ')}. `;
+            } else {
+                ctx += 'Nothing currently selected. ';
+            }
+            
+            // Camera position
+            ctx += `Camera at [${Math.round(cameraPosition.x)},${Math.round(cameraPosition.y)},${Math.round(cameraPosition.z)}]. `;
+            
+            // Ship positions and states
+            const shipStates = spaceships.map(s => {
+                const p = s.position;
+                const b = s.userData.behavior ? s.userData.behavior.type : 'idle';
+                return `${s.userData.name} at [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ${b}`;
+            });
+            ctx += `Ships: ${shipStates.join('; ')}`;
+            
+            return ctx;
+        }
+        
         async function queryLLM(userMessage) {
             try {
+                const context = buildContext();
+                const fullMessage = `[CONTEXT: ${context}]\n\nUser command: ${userMessage}`;
+                
                 const response = await fetch(BACKEND_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: userMessage })
+                    body: JSON.stringify({ message: fullMessage })
                 });
                 
                 if (!response.ok) {
@@ -3251,23 +3283,67 @@
                 const parsed = parseDSL(text);
                 executeDSL(parsed);
             } else {
-                // Natural language - send to LLM
-                addChatMsg('Processing...', 'computer');
-                const dslResponse = await queryLLM(text);
+                // Natural language - send to LLM with retry on errors
+                await processNaturalLanguage(text, 0);
+            }
+        }
+        
+        async function processNaturalLanguage(text, retryCount) {
+            const MAX_RETRIES = 2;
+            
+            addChatMsg('Processing...', 'computer');
+            const dslResponse = await queryLLM(text);
+            
+            // Remove "Processing..." message
+            const log = document.getElementById('chat-log');
+            log.removeChild(log.lastChild);
+            
+            // Handle response
+            const lines = dslResponse.split('\n').filter(l => l.trim());
+            const errors = [];
+            let successCount = 0;
+            
+            for (const line of lines) {
+                if (line.startsWith('MSG:')) {
+                    addChatMsg(line.substring(4).trim(), 'computer');
+                } else {
+                    addChatDSL(line);
+                    const parsed = parseDSL(line);
+                    if (parsed && parsed.error) {
+                        errors.push({ line, error: parsed.error });
+                        addChatMsg(parsed.error, 'error');
+                    } else if (parsed) {
+                        executeDSL(parsed);
+                        successCount++;
+                    }
+                }
+            }
+            
+            // If there were parse errors and we haven't retried too many times,
+            // send the errors back to the LLM for correction
+            if (errors.length > 0 && retryCount < MAX_RETRIES) {
+                const errorFeedback = `The following DSL commands had errors. Fix them and output ONLY the corrected DSL commands:\n` +
+                    errors.map(e => `"${e.line}" -> Error: ${e.error}`).join('\n') +
+                    `\n\nOriginal request was: "${text}"`;
                 
-                // Remove "Processing..." message
-                const log = document.getElementById('chat-log');
+                addChatMsg('Correcting errors...', 'computer');
+                const retryResponse = await queryLLM(errorFeedback);
+                
+                // Remove "Correcting..." message
                 log.removeChild(log.lastChild);
                 
-                // Handle response
-                const lines = dslResponse.split('\n').filter(l => l.trim());
-                for (const line of lines) {
+                const retryLines = retryResponse.split('\n').filter(l => l.trim());
+                for (const line of retryLines) {
                     if (line.startsWith('MSG:')) {
                         addChatMsg(line.substring(4).trim(), 'computer');
                     } else {
                         addChatDSL(line);
                         const parsed = parseDSL(line);
-                        executeDSL(parsed);
+                        if (parsed && parsed.error) {
+                            addChatMsg(parsed.error, 'error');
+                        } else if (parsed) {
+                            executeDSL(parsed);
+                        }
                     }
                 }
             }
