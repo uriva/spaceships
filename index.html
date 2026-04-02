@@ -515,10 +515,52 @@
         .chat-send:hover {
             color: #fff;
         }
+        /* Toast notifications */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none;
+        }
+        .toast {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 13px;
+            padding: 8px 18px;
+            border-radius: 4px;
+            border: 1px solid;
+            opacity: 0;
+            animation: toastIn 0.3s ease forwards, toastOut 0.4s ease 2.6s forwards;
+            white-space: nowrap;
+        }
+        .toast.warning {
+            background: rgba(255, 80, 0, 0.15);
+            border-color: rgba(255, 80, 0, 0.5);
+            color: #ff5000;
+        }
+        .toast.danger {
+            background: rgba(255, 0, 0, 0.15);
+            border-color: rgba(255, 0, 0, 0.5);
+            color: #ff3333;
+        }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes toastOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
     </style>
 </head>
 <body>
     <div id="canvas-container"></div>
+    <div id="toast-container"></div>
     <div class="crt-overlay"></div>
     
     <div class="status-display">
@@ -1591,7 +1633,9 @@
                 name: config.name,
                 teamColor: 0x44aaff,
                 engineOn: false,
-                baseY: config.y || 0
+                baseY: config.y || 0,
+                fuelDepleted: false,
+                weaponsDepleted: false
             };
             ship.position.set(config.x, config.y || 0, config.z);
             
@@ -2506,6 +2550,12 @@
             // Deplete weapons
             shipData.weapons = Math.max(0, shipData.weapons - WEAPON_COST);
             
+            // Toast when weapons run out
+            if (shipData.weapons <= 0 && !shipData.weaponsDepleted) {
+                shipData.weaponsDepleted = true;
+                showToast(`${shipData.name} — WEAPONS DEPLETED`, 'danger');
+            }
+            
             // Create laser beam
             const startPos = ship.position.clone();
             const endPos = target.position.clone();
@@ -2668,6 +2718,12 @@
                     data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
                 } else {
                     // No thrust — in space, velocity is preserved (no drag)
+                }
+                
+                // Toast when fuel runs out
+                if (data.fuel <= 0 && !data.fuelDepleted) {
+                    data.fuelDepleted = true;
+                    showToast(`${data.name} — FUEL DEPLETED`, 'danger');
                 }
                 
                 // Move ship based on velocity
@@ -3185,6 +3241,15 @@
             log.scrollTop = log.scrollHeight;
         }
         
+        function showToast(text, level = 'warning') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + level;
+            toast.textContent = text;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3200);
+        }
+        
         function addChatDSL(text) {
             const log = document.getElementById('chat-log');
             const msg = document.createElement('div');
@@ -3625,6 +3690,10 @@
                                     if (nearest && nearestDist < 50) {
                                         fireLaser(nearest);
                                         data.weapons--;
+                                        if (data.weapons <= 0 && !data.weaponsDepleted) {
+                                            data.weaponsDepleted = true;
+                                            showToast(`${data.name} — WEAPONS DEPLETED`, 'danger');
+                                        }
                                     }
                                     b.lastFired = Date.now();
                                 }
