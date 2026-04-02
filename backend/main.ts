@@ -110,7 +110,7 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       config: {
         systemInstruction: DSL_SYSTEM_PROMPT,
         temperature: 0.3,
-        maxOutputTokens: 200,
+        maxOutputTokens: 1000,
       },
     });
 
