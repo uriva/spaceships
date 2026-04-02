@@ -635,6 +635,10 @@
         let mouse = new THREE.Vector2();
         let starField;
         
+        // 3D cursor beams
+        let cursorBeamX, cursorBeamZ, cursorPos3D = new THREE.Vector3();
+        const WORLD_RADIUS = 500;
+        
         // Ship data
         let spaceships = [];
         let selectedShipIndex = -1;
@@ -690,7 +694,7 @@
         const ZOOM_LERP_FACTOR = 0.15;
         
         // Keyboard controls
-        let keys = { w: false, a: false, s: false, d: false, space: false, z: false, x: false };
+        let keys = { w: false, a: false, s: false, d: false, space: false, z: false, x: false, shift: false };
         const CAMERA_MOVE_SPEED = 0.8;
         const WORLD_BOUNDARY = 500;
         
@@ -774,6 +778,21 @@
             createSpaceships();
             createAsteroids();
             createBoundarySphere();
+            
+            // 3D cursor beams — two red lines from engagement sphere edges
+            const beamMat = new THREE.LineBasicMaterial({ color: 0xff2200, transparent: true, opacity: 0.35 });
+            const beamGeoX = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(-WORLD_RADIUS, 0, 0), new THREE.Vector3(WORLD_RADIUS, 0, 0)
+            ]);
+            const beamGeoZ = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, -WORLD_RADIUS), new THREE.Vector3(0, 0, WORLD_RADIUS)
+            ]);
+            cursorBeamX = new THREE.Line(beamGeoX, beamMat);
+            cursorBeamZ = new THREE.Line(beamGeoZ, beamMat);
+            cursorBeamX.frustumCulled = false;
+            cursorBeamZ.frustumCulled = false;
+            scene.add(cursorBeamX);
+            scene.add(cursorBeamZ);
             
             // Event listeners
             window.addEventListener('resize', onWindowResize, false);
@@ -1991,6 +2010,7 @@
             if (code === 'Space' || key === ' ' || key === 'spacebar') {
                 keys.space = true;
             }
+            if (event.shiftKey) keys.shift = true;
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = true;
             if (key === 'a' || code === 'KeyA' || key === 'arrowleft') keys.a = true;
@@ -2098,6 +2118,7 @@
             if (code === 'Space' || key === ' ' || key === 'spacebar') {
                 keys.space = false;
             }
+            if (!event.shiftKey) keys.shift = false;
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = false;
             if (key === 'a' || code === 'KeyA' || key === 'arrowleft') keys.a = false;
@@ -3156,6 +3177,26 @@
                 isCameraTransitioning = false;
             }
             
+            // Shift+WASD: move the crosshair on the Y=0 plane
+            if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d)) {
+                const speed = 2.5;
+                // Camera-relative directions projected onto XZ plane
+                const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                fwd.y = 0; fwd.normalize();
+                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+                right.y = 0; right.normalize();
+                
+                if (keys.w) cursorPos3D.addScaledVector(fwd, speed);
+                if (keys.s) cursorPos3D.addScaledVector(fwd, -speed);
+                if (keys.d) cursorPos3D.addScaledVector(right, speed);
+                if (keys.a) cursorPos3D.addScaledVector(right, -speed);
+                
+                // Clamp to engagement sphere
+                if (cursorPos3D.length() > WORLD_RADIUS) cursorPos3D.setLength(WORLD_RADIUS);
+                cursorPos3D.y = 0; // stay on ground plane
+                return; // don't move camera
+            }
+            
             if (keys.space) {
                 // SPHERE WALKING with tracked up vector
                 const orbitSpeed = 0.03;
@@ -3274,6 +3315,23 @@
             });
         }
         
+        // Update cursor beams — position at cursorPos3D on Y=0 plane
+        function updateCursorBeams() {
+            const cx = cursorPos3D.x, cz = cursorPos3D.z;
+            
+            // X beam runs through (cx, 0, cz) along X axis
+            const posX = cursorBeamX.geometry.attributes.position;
+            posX.setXYZ(0, -WORLD_RADIUS, 0, cz);
+            posX.setXYZ(1,  WORLD_RADIUS, 0, cz);
+            posX.needsUpdate = true;
+            
+            // Z beam runs through (cx, 0, cz) along Z axis
+            const posZ = cursorBeamZ.geometry.attributes.position;
+            posZ.setXYZ(0, cx, 0, -WORLD_RADIUS);
+            posZ.setXYZ(1, cx, 0,  WORLD_RADIUS);
+            posZ.needsUpdate = true;
+        }
+        
         function animate() {
             requestAnimationFrame(animate);
             
@@ -3289,6 +3347,7 @@
             updateBoundarySphere();
             updateProximityWireframe();
             updateShipHUD();
+            updateCursorBeams();
             
             renderer.render(scene, camera);
             
@@ -3890,6 +3949,9 @@
             
             // Camera position
             ctx += `Camera at [${Math.round(cameraPosition.x)},${Math.round(cameraPosition.y)},${Math.round(cameraPosition.z)}]. `;
+            
+            // Crosshair position
+            ctx += `Crosshair at [${Math.round(cursorPos3D.x)},${Math.round(cursorPos3D.y)},${Math.round(cursorPos3D.z)}]. `;
             
             // Ship positions, states, speed, and bearing
             const shipStates = spaceships.map(s => {
