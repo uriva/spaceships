@@ -1831,7 +1831,8 @@
                         y: (Math.random() - 0.5) * 0.01,
                         z: (Math.random() - 0.5) * 0.01
                     },
-                    mass: asteroidMass
+                    mass: asteroidMass,
+                    velocity: new THREE.Vector3(0, 0, 0)
                 };
                 
                 // ~1 in 8 asteroids becomes a super-dense body (iron core / dwarf planet)
@@ -1915,6 +1916,7 @@
                 mass: levMass,
                 isMassive: true,
                 name: 'Leviathan',
+                velocity: new THREE.Vector3(0, 0, 0),
             };
             
             // Orange glow ring
@@ -3001,10 +3003,32 @@
         }
         
         function updateAsteroids() {
-            asteroids.forEach(asteroid => {
+            const G_eff = G_GAME * gravityMultiplier;
+            
+            asteroids.forEach((asteroid, i) => {
+                // Spin
                 asteroid.rotation.x += asteroid.userData.rotationSpeed.x;
                 asteroid.rotation.y += asteroid.userData.rotationSpeed.y;
                 asteroid.rotation.z += asteroid.userData.rotationSpeed.z;
+                
+                // Gravitational acceleration from all other asteroids
+                const gravAccel = new THREE.Vector3(0, 0, 0);
+                for (let j = 0; j < asteroids.length; j++) {
+                    if (i === j) continue;
+                    const other = asteroids[j];
+                    const toOther = other.position.clone().sub(asteroid.position);
+                    const distSq = toOther.lengthSq();
+                    const dist = Math.sqrt(distSq);
+                    const minDist = (asteroid.scale.x + other.scale.x) * 0.5;
+                    if (dist < minDist) continue; // avoid singularity at overlap
+                    const strength = G_eff * other.userData.mass / distSq;
+                    gravAccel.add(toOther.normalize().multiplyScalar(strength));
+                }
+                asteroid.userData.velocity.add(gravAccel);
+                
+                // Move asteroid
+                asteroid.position.add(asteroid.userData.velocity);
+                
                 // Keep massive asteroid glow ring facing camera
                 const glow = asteroid.getObjectByName('massGlow');
                 if (glow) {
@@ -3014,6 +3038,34 @@
                     glow.lookAt(worldCamPos);
                 }
             });
+            
+            // Elastic collisions between asteroids
+            for (let i = 0; i < asteroids.length; i++) {
+                for (let j = i + 1; j < asteroids.length; j++) {
+                    const a = asteroids[i], b = asteroids[j];
+                    const diff = a.position.clone().sub(b.position);
+                    const dist = diff.length();
+                    const avgRadA = (a.scale.x + a.scale.y + a.scale.z) / 3;
+                    const avgRadB = (b.scale.x + b.scale.y + b.scale.z) / 3;
+                    const minDist = avgRadA + avgRadB;
+                    if (dist < minDist && dist > 0.01) {
+                        const normal = diff.normalize();
+                        const relVel = a.userData.velocity.clone().sub(b.userData.velocity);
+                        const vDotN = relVel.dot(normal);
+                        if (vDotN < 0) { // approaching
+                            const totalMass = a.userData.mass + b.userData.mass;
+                            // Elastic impulse with 30% energy loss
+                            const impulse = vDotN * 0.7;
+                            a.userData.velocity.sub(normal.clone().multiplyScalar(impulse * b.userData.mass / totalMass * 2));
+                            b.userData.velocity.add(normal.clone().multiplyScalar(impulse * a.userData.mass / totalMass * 2));
+                            // Separate so they don't overlap
+                            const overlap = (minDist - dist) * 0.5 + 0.1;
+                            a.position.add(normal.clone().multiplyScalar(overlap));
+                            b.position.sub(normal.clone().multiplyScalar(overlap));
+                        }
+                    }
+                }
+            }
         }
         
         function updateLasers() {
