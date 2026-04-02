@@ -481,6 +481,14 @@
             color: rgba(255, 80, 80, 0.9);
         }
         
+        .chat-msg.report {
+            color: rgba(180, 180, 220, 0.75);
+            font-size: 11px;
+            padding: 3px 8px;
+            border-left: 2px solid rgba(100, 140, 255, 0.25);
+            margin: 2px 0;
+        }
+        
         .chat-input-row {
             display: flex;
             border-top: 1px solid rgba(0, 255, 255, 0.2);
@@ -2136,11 +2144,10 @@
                 const top = Math.min(boxStart.y, boxEnd.y);
                 const bottom = Math.max(boxStart.y, boxEnd.y);
                 
-                // Find all objects inside the box
-                if (!event.shiftKey) deselectAll();
+                // Find all ships inside the box (box select = ships only)
+                if (!event.ctrlKey && !event.metaKey) deselectAll();
                 
-                const allSelectable = [...spaceships, ...asteroids];
-                allSelectable.forEach(obj => {
+                spaceships.forEach(obj => {
                     const screenPos = obj.position.clone().project(camera);
                     const sx = (screenPos.x * 0.5 + 0.5) * window.innerWidth;
                     const sy = (-screenPos.y * 0.5 + 0.5) * window.innerHeight;
@@ -2177,8 +2184,8 @@
                 }
                 
                 if (clickedObject) {
-                    if (event.shiftKey) {
-                        // Shift+click: toggle in selection
+                    if (event.ctrlKey || event.metaKey) {
+                        // Ctrl+click: toggle in selection
                         toggleInSelection(clickedObject);
                     } else {
                         // Normal click: select only this
@@ -3326,6 +3333,16 @@
             setTimeout(() => toast.remove(), 3200);
         }
         
+        // Ship autonomous reporting — throttled per ship, per reason
+        const _shipReportCooldowns = {};
+        function shipReport(shipData, reason, message) {
+            const key = shipData.name + ':' + reason;
+            const now = Date.now();
+            if (_shipReportCooldowns[key] && now - _shipReportCooldowns[key] < 10000) return; // 10s cooldown per ship per reason
+            _shipReportCooldowns[key] = now;
+            addChatMsg(`${shipData.name}: ${message}`, 'report');
+        }
+        
         function addChatDSL(text) {
             const log = document.getElementById('chat-log');
             const msg = document.createElement('div');
@@ -3605,14 +3622,84 @@
             
             spaceships.forEach(ship => {
                 const data = ship.userData;
+                const speed = data.velocity.length();
+                const fuelPct = data.fuel / data.maxFuel;
+                
+                // ── AUTONOMOUS: fuel self-preservation ──
+                // Critical fuel (< 5%): cut all thrust, drift only
+                if (fuelPct < 0.05 && data.fuel > 0) {
+                    if (data.behavior && data.behavior.type !== 'fuelCritical') {
+                        shipReport(data, 'fuelCritical', 'FUEL CRITICAL — cutting engines, drifting');
+                        data.behavior = { type: 'fuelCritical' };
+                    }
+                }
+                // Low fuel (< 20%): seek orbit around nearest massive asteroid
+                else if (fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake') {
+                    // Find nearest massive asteroid
+                    let nearestMassive = null, nearestDist = Infinity;
+                    asteroids.forEach(a => {
+                        if (!a.userData.isMassive) return;
+                        const d = a.position.distanceTo(ship.position);
+                        if (d < nearestDist) { nearestDist = d; nearestMassive = a; }
+                    });
+                    if (nearestMassive) {
+                        const avgScale = (nearestMassive.scale.x + nearestMassive.scale.y + nearestMassive.scale.z) / 3;
+                        const orbitRadius = avgScale * 2;
+                        const astName = nearestMassive.userData.name || 'massive asteroid';
+                        shipReport(data, 'fuelLow', `Fuel at ${Math.round(fuelPct * 100)}% — breaking off, seeking orbit around ${astName}`);
+                        data.behavior = {
+                            type: 'orbit',
+                            body: nearestMassive,
+                            radius: orbitRadius,
+                            phase: 'approach',
+                            _autoFuel: true  // flag: this was an autonomous decision
+                        };
+                    }
+                }
+                
+                // ── AUTONOMOUS: predictive collision avoidance ──
+                if (speed > 0.02 && data.behavior && data.behavior.type !== 'fuelCritical') {
+                    const lookAhead = Math.max(30, speed * 60); // ~1 second of travel at 60fps, min 30 units
+                    const futurePos = ship.position.clone().add(data.velocity.clone().normalize().multiplyScalar(lookAhead));
+                    for (const asteroid of asteroids) {
+                        // Check if future position is inside asteroid
+                        const toFuture = futurePos.clone().sub(asteroid.position);
+                        const maxScale = Math.max(asteroid.scale.x, asteroid.scale.y, asteroid.scale.z);
+                        const dangerRadius = maxScale + 5; // 5 units safety margin
+                        if (toFuture.length() < dangerRadius) {
+                            // We're heading into an asteroid — compute avoidance direction
+                            const toAsteroid = asteroid.position.clone().sub(ship.position);
+                            const forward = data.velocity.clone().normalize();
+                            // Perpendicular avoidance: component of toAsteroid perpendicular to velocity
+                            const avoidDir = toAsteroid.clone().sub(forward.clone().multiplyScalar(toAsteroid.dot(forward)));
+                            if (avoidDir.length() > 0.01) {
+                                avoidDir.normalize().negate(); // steer AWAY from asteroid
+                            } else {
+                                avoidDir.set(0, 1, 0); // edge case: head-on, dodge upward
+                            }
+                            // Blend avoidance into target velocity
+                            const avoidVel = data.velocity.clone().add(avoidDir.multiplyScalar(THRUST * 5));
+                            avoidVel.normalize().multiplyScalar(speed); // maintain current speed
+                            data.targetVelocity.copy(avoidVel);
+                            data.isAccelerating = true;
+                            const astName = asteroid.userData.name || 'asteroid';
+                            shipReport(data, 'avoidance', `Collision course — evading ${astName}`);
+                            break; // handle one threat at a time
+                        }
+                    }
+                }
+                
                 if (!data.behavior) return;
                 
                 const b = data.behavior;
-                const speed = data.velocity.length();
                 // Distance needed to brake from current speed to zero
                 const brakeDist = speed > 0.01 ? (speed * speed) / (2 * EFFECTIVE_BRAKE) + ARRIVAL_THRESHOLD : 0;
                 
                 switch (b.type) {
+                    case 'fuelCritical': {
+                        // Do nothing — no thrust, just drift. Physics preserves velocity.
+                        break;
+                    }
                     case 'move': {
                         const dir = b.target.clone().sub(ship.position);
                         const dist = dir.length();
