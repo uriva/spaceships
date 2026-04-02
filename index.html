@@ -3141,81 +3141,23 @@
         
         // ===== LLM INTEGRATION =====
         
-        const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands.
-
-Available DSL commands:
-MOVE <ships> TO <position>
-STOP <ships>
-ORBIT <ships> AROUND <position> RADIUS <number>
-PATROL <ships> BETWEEN <position> AND <position>
-FOLLOW <ships> TARGET <ship_name> DISTANCE <number>
-ATTACK <ships> TARGET <position_or_nearest_asteroid>
-
-Ship references: Ship-01 through Ship-15, or ranges like 1-5, or "all", or "selected"
-Positions: [x, y, z] coordinates, ship names, or "nearest_asteroid"
-
-Rules:
-- Output ONLY the DSL commands, one per line
-- No explanation, no markdown, no extra text
-- Use realistic coordinates within range -250 to 250
-- If the order is unclear, output a single line starting with MSG: followed by a clarification question
-
-Examples:
-User: "send ships 1 through 5 to patrol between the origin and position 100,0,100"
-PATROL 1-5 BETWEEN [0,0,0] AND [100,0,100]
-
-User: "have all ships orbit the center"
-ORBIT all AROUND [0,0,0] RADIUS 30
-
-User: "stop everything"
-STOP all
-
-User: "ship 3 follow ship 1"
-FOLLOW Ship-03 TARGET Ship-01 DISTANCE 15`;
-
-        let LLM_API_KEY = localStorage.getItem('starfleet_api_key') || '';
+        const BACKEND_URL = 'https://starfleet-computer.deno.dev';
         
         async function queryLLM(userMessage) {
-            if (!LLM_API_KEY) {
-                // Prompt for API key
-                LLM_API_KEY = prompt('Enter your OpenAI API key for Starfleet Computer:');
-                if (LLM_API_KEY) {
-                    localStorage.setItem('starfleet_api_key', LLM_API_KEY);
-                } else {
-                    return 'MSG: No API key provided. Set your OpenAI key to enable Starfleet Computer.';
-                }
-            }
-            
             try {
-                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                const response = await fetch(BACKEND_URL, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${LLM_API_KEY}`
-                    },
-                    body: JSON.stringify({
-                        model: 'gpt-4o-mini',
-                        messages: [
-                            { role: 'system', content: DSL_SYSTEM_PROMPT },
-                            { role: 'user', content: userMessage }
-                        ],
-                        max_tokens: 200,
-                        temperature: 0.3
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: userMessage })
                 });
                 
                 if (!response.ok) {
-                    const err = await response.json();
-                    if (response.status === 401) {
-                        LLM_API_KEY = '';
-                        localStorage.removeItem('starfleet_api_key');
-                        return 'MSG: Invalid API key. Please try again.';
-                    }
-                    return 'MSG: API error: ' + (err.error?.message || response.statusText);
+                    const err = await response.json().catch(() => ({}));
+                    return 'MSG: Backend error: ' + (err.error || response.statusText);
                 }
                 
                 const data = await response.json();
-                return data.choices[0].message.content.trim();
+                return data.dsl || 'MSG: Empty response from computer';
             } catch (e) {
                 return 'MSG: Connection error: ' + e.message;
             }
