@@ -2641,13 +2641,21 @@
                 
                 // Apply physics: accelerate toward target velocity
                 if (data.isAccelerating && hasFuel) {
-                    // Thrust toward target velocity
-                    const acceleration = data.targetVelocity.clone().sub(data.velocity).normalize().multiplyScalar(THRUST);
-                    data.velocity.add(acceleration);
-                    if (data.velocity.length() > MAX_SPEED) {
-                        data.velocity.normalize().multiplyScalar(MAX_SPEED);
+                    // Check if we actually need thrust (not already at cruise speed)
+                    const velDiff = data.targetVelocity.clone().sub(data.velocity);
+                    if (velDiff.length() > THRUST * 0.5) {
+                        // Thrust toward target velocity — burns fuel
+                        const acceleration = velDiff.normalize().multiplyScalar(THRUST);
+                        data.velocity.add(acceleration);
+                        if (data.velocity.length() > MAX_SPEED) {
+                            data.velocity.normalize().multiplyScalar(MAX_SPEED);
+                        }
+                        data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
+                    } else {
+                        // At cruise speed — coast for free (no fuel burn, no engine particles)
+                        data.velocity.copy(data.targetVelocity);
+                        data.isAccelerating = false;
                     }
-                    data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
                 } else if (data.isBraking && hasFuel) {
                     // Reverse thrust — same engine, same power, same fuel cost
                     if (speed <= THRUST) {

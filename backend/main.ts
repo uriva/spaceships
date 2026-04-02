@@ -30,6 +30,10 @@ FLEET:
 - Ships 02-07 form inner shell at ~15 units from center
 - Ships 08-15 form outer shell at ~30 units from center
 - Each ship has fuel (500t max) and weapons (100 charges)
+- Fuel is burned only during acceleration and braking (~8t per move). Cruising at constant speed is free (coasting in space).
+- ORBIT is the most fuel-efficient long-term behavior: after initial injection the ship coasts on gravity for free.
+- When fleet fuel is below 30%, prefer fuel-saving strategies: shorter moves, orbits around massive asteroids, or STOP to conserve.
+- If a user asks to move ships a huge distance and fuel is low, warn them in an MSG before the command.
 
 Available DSL commands:
 MOVE <ships> TO [x, y, z]
