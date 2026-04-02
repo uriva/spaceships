@@ -3490,7 +3490,7 @@
                 const backPos = cursorOrbSurfaceBack.position;
                 const arrowRight = new THREE.Vector3().crossVectors(cursorDir, cursorUp).normalize();
                 const arrowUp = cursorUp.clone().normalize();
-                const zPushDir = cursorDir.clone().multiplyScalar(cursorRadialDir).normalize();
+                const zPushDir = cursorDir.clone().normalize();
                 const baseOffset = 8;
                 const yUp = new THREE.Vector3(0, 1, 0);
                 // Scale arrows so they stay constant size on screen
