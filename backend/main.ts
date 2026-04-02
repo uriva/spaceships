@@ -118,38 +118,55 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       );
     }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: userMessage,
-      config: {
-        systemInstruction: DSL_SYSTEM_PROMPT,
-        temperature: 0.3,
-        maxOutputTokens: 2000,
-      },
-    });
-
-    // Try multiple ways to extract text from response
-    let text = "";
-    try {
-      text = response.text?.trim() || "";
-    } catch (_) {
-      // fallback
-    }
-    if (!text) {
+    // Retry up to 2 times on transient Gemini failures
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        text = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-      } catch (_) {
-        // fallback
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: userMessage,
+          config: {
+            systemInstruction: DSL_SYSTEM_PROMPT,
+            temperature: 0.3,
+            maxOutputTokens: 2000,
+          },
+        });
+
+        // Try multiple ways to extract text from response
+        let text = "";
+        try {
+          text = response.text?.trim() || "";
+        } catch (_) {
+          // fallback
+        }
+        if (!text) {
+          try {
+            text = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+          } catch (_) {
+            // fallback
+          }
+        }
+        if (!text) {
+          console.error("Empty response from Gemini. Full response:", JSON.stringify(response));
+          text = "MSG: Starfleet Computer is processing. Please try again.";
+        }
+
+        return new Response(
+          JSON.stringify({ dsl: text }),
+          { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+        );
+      } catch (e) {
+        lastError = e;
+        console.error(`Gemini attempt ${attempt + 1} failed:`, e);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
       }
     }
-    if (!text) {
-      console.error("Empty response from Gemini. Full response:", JSON.stringify(response));
-      text = "MSG: Starfleet Computer is processing. Please try again.";
-    }
 
+    // All retries failed
+    console.error("All Gemini retries failed:", lastError);
     return new Response(
-      JSON.stringify({ dsl: text }),
-      { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      JSON.stringify({ error: "Gemini API error after retries", details: String(lastError) }),
+      { status: 502, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
     );
   } catch (e) {
     console.error("Server error:", e);

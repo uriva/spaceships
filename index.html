@@ -1248,6 +1248,41 @@
                     
                     spaceships.push(ship);
                     scene.add(ship);
+                    
+                    // Create motion trail
+                    const TRAIL_LENGTH = 60; // number of trail points
+                    const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                    const trailColors = new Float32Array(TRAIL_LENGTH * 4); // RGBA
+                    const trailGeometry = new THREE.BufferGeometry();
+                    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                    trailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 4));
+                    const trailMaterial = new THREE.ShaderMaterial({
+                        vertexShader: `
+                            attribute vec4 color;
+                            varying vec4 vColor;
+                            void main() {
+                                vColor = color;
+                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                            }
+                        `,
+                        fragmentShader: `
+                            varying vec4 vColor;
+                            void main() {
+                                gl_FragColor = vColor;
+                            }
+                        `,
+                        transparent: true,
+                        depthWrite: false,
+                    });
+                    const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                    trailLine.frustumCulled = false;
+                    scene.add(trailLine);
+                    ship.userData.trail = {
+                        line: trailLine,
+                        positions: [], // array of Vector3
+                        maxLength: TRAIL_LENGTH,
+                    };
+                    
                     shipIndex++;
                 }
             }
@@ -2566,6 +2601,53 @@
                     }
                 }
                 
+                // Update motion trail
+                const trail = data.trail;
+                if (trail) {
+                    const currentSpeed = data.velocity.length();
+                    // Only record trail points when actually moving
+                    if (currentSpeed > 0.01) {
+                        trail.positions.push(ship.position.clone());
+                        if (trail.positions.length > trail.maxLength) {
+                            trail.positions.shift();
+                        }
+                    } else if (trail.positions.length > 0) {
+                        // Fade out: remove oldest point each frame when stopped
+                        trail.positions.shift();
+                    }
+                    
+                    // Update trail geometry
+                    const posAttr = trail.line.geometry.getAttribute('position');
+                    const colAttr = trail.line.geometry.getAttribute('color');
+                    const len = trail.positions.length;
+                    
+                    // Extract team color components
+                    const r = ((data.teamColor >> 16) & 0xFF) / 255;
+                    const g = ((data.teamColor >> 8) & 0xFF) / 255;
+                    const b = (data.teamColor & 0xFF) / 255;
+                    
+                    for (let j = 0; j < trail.maxLength; j++) {
+                        if (j < len) {
+                            const p = trail.positions[j];
+                            posAttr.array[j * 3] = p.x;
+                            posAttr.array[j * 3 + 1] = p.y;
+                            posAttr.array[j * 3 + 2] = p.z;
+                            // Fade: oldest = 0 opacity, newest = 0.6 opacity
+                            const alpha = (j / len) * 0.6;
+                            colAttr.array[j * 4] = r;
+                            colAttr.array[j * 4 + 1] = g;
+                            colAttr.array[j * 4 + 2] = b;
+                            colAttr.array[j * 4 + 3] = alpha;
+                        } else {
+                            // Hide unused points by zeroing alpha
+                            colAttr.array[j * 4 + 3] = 0;
+                        }
+                    }
+                    posAttr.needsUpdate = true;
+                    colAttr.needsUpdate = true;
+                    trail.line.geometry.setDrawRange(0, len);
+                }
+                
                 // Reset flags for next frame
                 data.isAccelerating = false;
                 data.isBraking = false;
@@ -3093,10 +3175,15 @@
             
             switch (cmd) {
                 case 'MOVE': {
-                    // MOVE <ships> TO <position>
-                    const toIdx = tokens.findIndex(t => t.toUpperCase() === 'TO');
-                    if (toIdx < 0) return { error: 'MOVE requires TO keyword' };
-                    const shipsSpec = tokens.slice(1, toIdx).join(' ');
+                    // MOVE <ships> TO <position> — TO is optional
+                    let toIdx = tokens.findIndex(t => t.toUpperCase() === 'TO');
+                    if (toIdx < 0) {
+                        // No TO keyword — find where the position starts (first '[' or coordinate)
+                        toIdx = tokens.findIndex((t, i) => i > 0 && (t.startsWith('[') || t.startsWith('(')));
+                        if (toIdx < 0) return { error: 'MOVE: no target position found' };
+                        toIdx--; // offset so slice(toIdx+1) grabs the position
+                    }
+                    const shipsSpec = tokens.slice(1, toIdx + 1).join(' ').replace(/\bto\b/i, '').trim() || 'selected';
                     const posStr = tokens.slice(toIdx + 1).join(' ');
                     const ships = findShips(shipsSpec);
                     const pos = parsePosition(posStr);
