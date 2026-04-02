@@ -1,3 +1,5 @@
+import { GoogleGenAI } from "npm:@google/genai";
+
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 
 const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands.
@@ -38,8 +40,9 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
 Deno.serve({ port: 8000 }, async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
@@ -69,40 +72,17 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       );
     }
 
-    // Call Gemini API
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro:generateContent?key=${GEMINI_API_KEY}`;
-
-    const geminiResponse = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: DSL_SYSTEM_PROMPT }],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: userMessage }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 200,
-        },
-      }),
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: userMessage,
+      config: {
+        systemInstruction: DSL_SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxOutputTokens: 200,
+      },
     });
 
-    if (!geminiResponse.ok) {
-      const errText = await geminiResponse.text();
-      console.error("Gemini API error:", errText);
-      return new Response(
-        JSON.stringify({ error: "Gemini API error", details: errText }),
-        { status: 502, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
-      );
-    }
-
-    const geminiData = await geminiResponse.json();
-    const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "MSG: No response from Gemini";
+    const text = response.text?.trim() || "MSG: No response from Gemini";
 
     return new Response(
       JSON.stringify({ dsl: text }),
