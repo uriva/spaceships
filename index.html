@@ -594,6 +594,7 @@
         <p><span class="key">SHIFT</span> crosshair</p>
         <p><span class="key">SPACE</span> viewing angle</p>
         <p>none → strafe</p>
+        <p id="mode-label" style="margin-top: 6px; font-size: 12px; color: #00ffcc; text-transform: uppercase; letter-spacing: 1px;">Strafe</p>
     </div>
     
     <div id="selection-indicators"></div>
@@ -1949,19 +1950,6 @@
                 if (Math.random() < 0.125) {
                     asteroid.userData.mass *= 200;
                     asteroid.userData.isMassive = true;
-                    // Visual indicator: orange glow ring
-                    const avgScale = (asteroid.scale.x + asteroid.scale.y + asteroid.scale.z) / 3;
-                    const glowGeo = new THREE.RingGeometry(avgScale * 1.2, avgScale * 1.5, 32);
-                    const glowMat = new THREE.MeshBasicMaterial({
-                        color: 0xff6600,
-                        transparent: true,
-                        opacity: 0.15,
-                        side: THREE.DoubleSide
-                    });
-                    const glow = new THREE.Mesh(glowGeo, glowMat);
-                    glow.lookAt(camera.position);
-                    asteroid.add(glow);
-                    glow.name = 'massGlow';
                 }
                 
                 asteroids.push(asteroid);
@@ -2028,20 +2016,6 @@
                 velocity: new THREE.Vector3(0, 0, 0),
             };
             
-            // Orange glow ring
-            const levAvgScale = (leviathan.scale.x + leviathan.scale.y + leviathan.scale.z) / 3;
-            const levGlowGeo = new THREE.RingGeometry(levAvgScale * 1.2, levAvgScale * 1.5, 64);
-            const levGlowMat = new THREE.MeshBasicMaterial({
-                color: 0xff6600,
-                transparent: true,
-                opacity: 0.2,
-                side: THREE.DoubleSide,
-            });
-            const levGlow = new THREE.Mesh(levGlowGeo, levGlowMat);
-            levGlow.lookAt(camera.position);
-            levGlow.name = 'massGlow';
-            leviathan.add(levGlow);
-            
             asteroids.push(leviathan);
             scene.add(leviathan);
             registerPosition(leviathan.position, 70);
@@ -2101,6 +2075,13 @@
         
         // Keyboard state
         
+        function updateModeLabel() {
+            const el = document.getElementById('mode-label');
+            if (keys.shift) { el.textContent = 'Marking Target'; el.style.color = '#ff6644'; }
+            else if (keys.space) { el.textContent = 'Looking Around'; el.style.color = '#44aaff'; }
+            else { el.textContent = 'Strafe'; el.style.color = '#00ffcc'; }
+        }
+        
         function onKeyDown(event) {
             const key = event.key.toLowerCase();
             const code = event.code;
@@ -2114,6 +2095,7 @@
                 keys.space = true;
             }
             if (event.shiftKey) keys.shift = true;
+            updateModeLabel();
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = true;
             if (key === 'a' || code === 'KeyA' || key === 'arrowleft') keys.a = true;
@@ -2206,6 +2188,7 @@
                 keys.space = false;
             }
             if (!event.shiftKey) keys.shift = false;
+            updateModeLabel();
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = false;
             if (key === 'a' || code === 'KeyA' || key === 'arrowleft') keys.a = false;
@@ -3129,15 +3112,6 @@
                 
                 // Move asteroid
                 asteroid.position.add(asteroid.userData.velocity);
-                
-                // Keep massive asteroid glow ring facing camera
-                const glow = asteroid.getObjectByName('massGlow');
-                if (glow) {
-                    // Convert camera world position to asteroid local space for lookAt
-                    const worldCamPos = cameraPosition.clone();
-                    asteroid.worldToLocal(worldCamPos);
-                    glow.lookAt(worldCamPos);
-                }
             });
             
             // Elastic collisions between asteroids
@@ -3534,17 +3508,17 @@
                 // Primary orb arrows
                 orientArrow(cursorKeyArrows.W, surfPos, arrowUp, scaleFront);
                 orientArrow(cursorKeyArrows.S, surfPos, arrowUp.clone().negate(), scaleFront);
-                orientArrow(cursorKeyArrows.D, surfPos, arrowRight, scaleFront);
-                orientArrow(cursorKeyArrows.A, surfPos, arrowRight.clone().negate(), scaleFront);
+                orientArrow(cursorKeyArrows.A, surfPos, arrowRight, scaleFront);
+                orientArrow(cursorKeyArrows.D, surfPos, arrowRight.clone().negate(), scaleFront);
                 orientArrow(cursorKeyArrows.Z, surfPos, zPushDir, scaleFront);
                 orientArrow(cursorKeyArrows.X, surfPos, zPushDir.clone().negate(), scaleFront);
-                // Back orb arrows — WASD mirrored (opposite hemisphere), Z/X same (circular)
+                // Back orb arrows — all reversed (opposite hemisphere)
                 orientArrow(cursorKeyArrowsBack.W, backPos, arrowUp.clone().negate(), scaleBack);
                 orientArrow(cursorKeyArrowsBack.S, backPos, arrowUp, scaleBack);
-                orientArrow(cursorKeyArrowsBack.D, backPos, arrowRight.clone().negate(), scaleBack);
-                orientArrow(cursorKeyArrowsBack.A, backPos, arrowRight, scaleBack);
-                orientArrow(cursorKeyArrowsBack.Z, backPos, zPushDir, scaleBack);
-                orientArrow(cursorKeyArrowsBack.X, backPos, zPushDir.clone().negate(), scaleBack);
+                orientArrow(cursorKeyArrowsBack.A, backPos, arrowRight.clone().negate(), scaleBack);
+                orientArrow(cursorKeyArrowsBack.D, backPos, arrowRight, scaleBack);
+                orientArrow(cursorKeyArrowsBack.Z, backPos, zPushDir.clone().negate(), scaleBack);
+                orientArrow(cursorKeyArrowsBack.X, backPos, zPushDir, scaleBack);
             }
         }
         
