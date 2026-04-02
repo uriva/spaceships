@@ -2591,17 +2591,17 @@
                     const dist = toShip.length();
                     if (dist < collisionRadius && dist > 0.01) {
                         const normal = toShip.normalize();
-                        // Push ship to surface
-                        ship.position.copy(asteroid.position).add(normal.clone().multiplyScalar(collisionRadius));
-                        // Reflect velocity: v' = v - 2(v·n)n, then dampen
                         const vDotN = data.velocity.dot(normal);
-                        if (vDotN < 0) { // only bounce if moving into the surface
+                        if (vDotN < 0) { // only act if moving into the surface
+                            // Push ship to surface
+                            ship.position.copy(asteroid.position).add(normal.clone().multiplyScalar(collisionRadius));
+                            // Reflect velocity: v' = v - 2(v·n)n, then dampen
                             data.velocity.sub(normal.clone().multiplyScalar(2 * vDotN));
                             data.velocity.multiplyScalar(0.7); // 30% energy loss
-                        }
-                        // Clear move behavior so it doesn't ram back in
-                        if (data.behavior && data.behavior.type === 'move') {
-                            data.behavior = null;
+                            // Clear move behavior so it doesn't ram back in
+                            if (data.behavior && data.behavior.type === 'move') {
+                                data.behavior = null;
+                            }
                         }
                     }
                 }
