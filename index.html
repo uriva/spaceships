@@ -2532,8 +2532,7 @@
                     // Consume minimal fuel for braking
                     data.fuel = Math.max(0, data.fuel - DECELERATION_FUEL_COST);
                 } else {
-                    // Passive deceleration (friction/drag in space is minimal)
-                    data.velocity.multiplyScalar(0.995); // Very slight decay
+                    // No thrust — in space, velocity is preserved (no drag)
                 }
                 
                 // Move ship based on velocity
