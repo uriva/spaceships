@@ -20,12 +20,12 @@ Use the context to resolve ambiguous references. For example:
 - "what's near the cursor" / "anything at the crosshair" → list objects near the Crosshair position
 
 TERRITORY:
-- Engagement zone is a sphere of radius 500 units centered at [0, 0, 0]
+- Engagement zone is a sphere of radius 5000 units centered at [0, 0, 0]
 - 1 unit = 100 meters (0.1 km)
 - The fleet starts near [0, 0, 0] in a spherical formation
-- Asteroids are scattered throughout the zone at distances 30-430 units from center
+- Asteroids are scattered throughout the zone at distances 300-4300 units from center
 - The center of the territory is [0, 0, 0]
-- "nearby" means within 50 units, "far" means 200+ units
+- "nearby" means within 500 units, "far" means 2000+ units
 
 FLEET:
 - 15 corvette-class ships: Ship-01 through Ship-15
@@ -63,18 +63,18 @@ Rules:
   - "here" / "there" / "this spot" / "crosshair" / "cursor" = use the Crosshair position from context
   - "follow me" / "follow my cursor" / "follow the crosshair" / "follow where I'm pointing" = use FOLLOW with TARGET CROSSHAIR (continuous tracking, not a one-off MOVE)
   - "the center" / "home" / "origin" = [0, 0, 0]
-  - "out of the asteroid zone" / "outside" / "edge" / "boundary" = a point near the sphere boundary, e.g. [480, 0, 0]
-  - "far away" / "deep space" = [400, 0, 400] or similar far coordinates
-  - "above" / "high up" = increase Y, e.g. [0, 200, 0]
+  - "out of the asteroid zone" / "outside" / "edge" / "boundary" = a point near the sphere boundary, e.g. [4800, 0, 0]
+  - "far away" / "deep space" = [4000, 0, 4000] or similar far coordinates
+  - "above" / "high up" = increase Y, e.g. [0, 2000, 0]
   - "behind the Leviathan" = offset from Leviathan position in context
   - Use the CONTEXT asteroid/ship positions to compute relative references like "near that asteroid", "between ships 1 and 5", etc.
 - NEVER ask clarifying questions. Always use sensible defaults:
   - "orbit" without radius → omit RADIUS, system auto-sizes from asteroid. Use the nearest MASSIVE asteroid position as AROUND target.
-  - "patrol" without positions = use [0,0,0] and a sensible far point like [150,0,150]
+  - "patrol" without positions = use [0,0,0] and a sensible far point like [1500,0,1500]
   - "spread out" = move ships to various positions within the zone
   - "defensive formation" = orbit around nearest massive asteroid
   - "attack formation" = move toward the target in a wedge
-- Coordinates should be within -490 to 490 range (boundary sphere radius is 500)
+- Coordinates should be within -4900 to 4900 range (boundary sphere radius is 5000)
 - Use 3D coordinates (vary Y too, not just X and Z)
 
 Examples:

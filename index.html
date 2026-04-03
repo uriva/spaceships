@@ -627,11 +627,11 @@
         
         // 3D cursor beams — position stored as spherical coords
         let cursorBeamX, cursorBeamZ, cursorBeamY, cursorOrb, cursorOrbSurface, cursorOrbSurfaceBack, cursorOrbX, cursorOrbZ, cursorOrbY, cursorOrbXn, cursorOrbZn, cursorOrbYn, cursorSurfaceBeam, cursorPos3D = new THREE.Vector3();
-        const WORLD_RADIUS = 500;
+        const WORLD_RADIUS = 5000;
         // Cursor direction (unit vector) + local up + radius — no spherical coords, no pole singularity
         let cursorDir = new THREE.Vector3(0, 0, 1).normalize();  // initial direction
         let cursorUp = new THREE.Vector3(0, 1, 0);               // local "up" for cursor — avoids pole lock
-        let cursorRadius = 250;          // half-way out
+        let cursorRadius = 2500;          // half-way out
         let cursorRadialDir = 1;         // +1 or -1, flips at sphere boundary so Z/X wrap through
         let cursorKeyArrows = {};        // direction arrows on primary surface orb
         let cursorKeyArrowsBack = {};   // direction arrows on opposite surface orb
@@ -652,7 +652,7 @@
         // Scale: 1 game unit = 0.1 km (100m)
         // Ship (~3 units long) = ~300m - close to corvette scale
         // Formation spread (~30 units) = ~3 km
-        // Engagement sphere (500 units) = ~50 km
+        // Engagement sphere (5000 units) = ~500 km
         const KM_PER_UNIT = 0.1;
         
         // Ship physics (corvette-class, ~200m, 50,000 tonnes)
@@ -690,11 +690,11 @@
         
         // Keyboard controls
         let keys = { w: false, a: false, s: false, d: false, space: false, shift: false, z: false, x: false };
-        const CAMERA_MOVE_SPEED_MIN = 0.8;
-        const CAMERA_MOVE_SPEED_MAX = 6.0;
+        const CAMERA_MOVE_SPEED_MIN = 4.0;
+        const CAMERA_MOVE_SPEED_MAX = 40.0;
         const CAMERA_ACCEL_FRAMES = 90;  // frames to reach max speed
         let cameraMoveHeldFrames = 0;
-        const WORLD_BOUNDARY = 500;
+        const WORLD_BOUNDARY = 5000;
         
         // Double-tap tracking for L key
         let lastLPressTime = 0;
@@ -1214,34 +1214,6 @@
                 }
             `;
 
-            // Corona glow shader — soft atmospheric halo
-            const coronaVertexShader = `
-                varying vec3 vNormal;
-                varying vec3 vPosition;
-                void main() {
-                    vNormal = normalize(normalMatrix * normal);
-                    vPosition = (modelViewMatrix * vec4(position, 1.0)).xyz;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `;
-            const coronaFragmentShader = `
-                uniform vec3 uColor;
-                uniform float uIntensity;
-                uniform float uFalloff;
-                uniform float uTime;
-                varying vec3 vNormal;
-                varying vec3 vPosition;
-                void main() {
-                    vec3 viewDir = normalize(-vPosition);
-                    float NdotV = dot(normalize(vNormal), viewDir);
-                    // Inverse fresnel — bright at edges, transparent at center
-                    float glow = pow(1.0 - clamp(NdotV, 0.0, 1.0), uFalloff);
-                    // Slight temporal variation
-                    glow *= uIntensity * (0.9 + 0.1 * sin(uTime * 0.7));
-                    gl_FragColor = vec4(uColor, glow);
-                }
-            `;
-
             // Star type palettes  [core, mid, edge, light hex]
             const starPalettes = [
                 { // Red dwarf / M-type
@@ -1274,7 +1246,7 @@
             for (let i = 0; i < numSuns; i++) {
                 const sunSize = 40 + Math.random() * 60;
                 const palette = starPalettes[Math.floor(Math.random() * starPalettes.length)];
-                const sunPos = generateSpacedPosition(800, 1500, 300);
+                const sunPos = generateSpacedPosition(8000, 15000, 3000);
 
                 // ── Star surface (shader) ──
                 const sunGeometry = new THREE.SphereGeometry(sunSize, 48, 48);
@@ -1292,70 +1264,55 @@
                 const sun = new THREE.Mesh(sunGeometry, sunMaterial);
                 sun.position.copy(sunPos);
 
-                // ── Corona layers (fresnel glow shader) ──
-                const coronaConfigs = [
-                    { scale: 1.15, intensity: 0.8, falloff: 3.0, color: palette.mid },
-                    { scale: 1.4,  intensity: 0.45, falloff: 2.5, color: palette.edge },
-                    { scale: 2.0,  intensity: 0.18, falloff: 2.0, color: palette.edge },
-                    { scale: 3.0,  intensity: 0.06, falloff: 1.5, color: new THREE.Color().copy(palette.edge).lerp(palette.mid, 0.3) }
-                ];
-                const coronaMeshes = [];
-                coronaConfigs.forEach(cfg => {
-                    const geo = new THREE.SphereGeometry(sunSize * cfg.scale, 32, 32);
-                    const mat = new THREE.ShaderMaterial({
-                        uniforms: {
-                            uColor:     { value: cfg.color },
-                            uIntensity: { value: cfg.intensity },
-                            uFalloff:   { value: cfg.falloff },
-                            uTime:      { value: 0 }
-                        },
-                        vertexShader: coronaVertexShader,
-                        fragmentShader: coronaFragmentShader,
-                        transparent: true,
-                        blending: THREE.AdditiveBlending,
-                        side: THREE.BackSide,
-                        depthWrite: false
-                    });
-                    const mesh = new THREE.Mesh(geo, mat);
-                    sun.add(mesh);
-                    coronaMeshes.push(mesh);
-                });
+                // ── Billboard glow sprite — single smooth radial falloff ──
+                // No corona sphere shells; just one high-res gradient sprite
+                // that transitions core white → star color → transparent
+                const glowCanvas = document.createElement('canvas');
+                glowCanvas.width = 512;
+                glowCanvas.height = 512;
+                const glowCtx = glowCanvas.getContext('2d');
+                const cx = 256, cy = 256;
+                // Build gradient from palette colors
+                const coreCSS = `rgb(${Math.round(palette.core.r*255)},${Math.round(palette.core.g*255)},${Math.round(palette.core.b*255)})`;
+                const midCSS  = `rgb(${Math.round(palette.mid.r*255)},${Math.round(palette.mid.g*255)},${Math.round(palette.mid.b*255)})`;
+                const edgeCSS = `rgb(${Math.round(palette.edge.r*255)},${Math.round(palette.edge.g*255)},${Math.round(palette.edge.b*255)})`;
+                const gradient = glowCtx.createRadialGradient(cx, cy, 0, cx, cy, 256);
+                // Intensely bright core (covers the physical sphere area)
+                gradient.addColorStop(0,    `rgba(255,255,255,1)`);
+                gradient.addColorStop(0.06, `rgba(255,255,250,0.95)`);
+                gradient.addColorStop(0.10, coreCSS.replace('rgb', 'rgba').replace(')', ',0.85)'));
+                // Transition to star's characteristic mid color
+                gradient.addColorStop(0.18, midCSS.replace('rgb', 'rgba').replace(')', ',0.55)'));
+                gradient.addColorStop(0.28, midCSS.replace('rgb', 'rgba').replace(')', ',0.3)'));
+                // Outer glow fades through edge color
+                gradient.addColorStop(0.40, edgeCSS.replace('rgb', 'rgba').replace(')', ',0.15)'));
+                gradient.addColorStop(0.55, edgeCSS.replace('rgb', 'rgba').replace(')', ',0.06)'));
+                gradient.addColorStop(0.75, edgeCSS.replace('rgb', 'rgba').replace(')', ',0.02)'));
+                gradient.addColorStop(1,    'rgba(0,0,0,0)');
+                glowCtx.fillStyle = gradient;
+                glowCtx.fillRect(0, 0, 512, 512);
+                const glowTexture = new THREE.CanvasTexture(glowCanvas);
 
-                // ── Billboard glow sprite for "blinding brightness" ──
                 const spriteMat = new THREE.SpriteMaterial({
-                    map: null,  // we'll make a radial gradient canvas texture
-                    color: palette.light,
+                    map: glowTexture,
                     transparent: true,
                     blending: THREE.AdditiveBlending,
                     depthWrite: false,
-                    opacity: 0.35
+                    opacity: 1.0
                 });
-                // Radial gradient texture
-                const glowCanvas = document.createElement('canvas');
-                glowCanvas.width = 256;
-                glowCanvas.height = 256;
-                const glowCtx = glowCanvas.getContext('2d');
-                const gradient = glowCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
-                gradient.addColorStop(0, 'rgba(255,255,255,1)');
-                gradient.addColorStop(0.15, 'rgba(255,255,240,0.6)');
-                gradient.addColorStop(0.4, 'rgba(255,200,100,0.2)');
-                gradient.addColorStop(1, 'rgba(255,150,50,0)');
-                glowCtx.fillStyle = gradient;
-                glowCtx.fillRect(0, 0, 256, 256);
-                const glowTexture = new THREE.CanvasTexture(glowCanvas);
-                spriteMat.map = glowTexture;
                 const sprite = new THREE.Sprite(spriteMat);
-                sprite.scale.setScalar(sunSize * 6);
+                // Sprite should be large: the physical sphere sits in the bright core area
+                // At 0.10 gradient stop the sphere edge maps, so sprite = sunSize / 0.10 ≈ 10x
+                sprite.scale.setScalar(sunSize * 10);
                 sun.add(sprite);
 
                 // ── Point light ──
-                const sunLight = new THREE.PointLight(palette.light, 5, 1500);
+                const sunLight = new THREE.PointLight(palette.light, 5, 15000);
                 sun.add(sunLight);
 
                 sun.userData = {
                     type: 'sun',
                     rotationSpeed: (Math.random() - 0.5) * 0.0005,
-                    coronaMeshes: coronaMeshes,
                     starMaterial: sunMaterial,
                     sprite: sprite
                 };
@@ -1447,8 +1404,8 @@
                 const planetType = planetTypes[Math.floor(Math.random() * planetTypes.length)];
                 const baseColor = planetType.colors[Math.floor(Math.random() * planetType.colors.length)];
                 
-                // Position planet far outside boundary (200-500 units), ensure separation of 100 units
-                const planetPos = generateSpacedPosition(600, 1200, 200);
+                // Position planet far outside boundary (2000-5000 units), ensure separation of 1000 units
+                const planetPos = generateSpacedPosition(6000, 12000, 2000);
                 
                 const planetGeometry = new THREE.SphereGeometry(planetSize, 24, 24);
                 
@@ -2059,7 +2016,7 @@
                 let distance, theta, phi;
                 
                 do {
-                    distance = 30 + Math.random() * 400;
+                    distance = 300 + Math.random() * 4000;
                     theta = Math.random() * Math.PI * 2;
                     phi = Math.acos(2 * Math.random() - 1);
                     
@@ -2212,7 +2169,7 @@
         }
         
         function createBoundarySphere() {
-            const R = 500;
+            const R = 5000;
             const segments = 64;
             const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15 });
             const group = new THREE.Group();
@@ -3379,16 +3336,10 @@
                             if (body.userData.starMaterial) {
                                 body.userData.starMaterial.uniforms.uTime.value = time;
                             }
-                            // Drive corona shader time
-                            if (body.userData.coronaMeshes) {
-                                body.userData.coronaMeshes.forEach(mesh => {
-                                    mesh.material.uniforms.uTime.value = time;
-                                });
-                            }
                             // Subtle sprite pulse
                             if (body.userData.sprite) {
-                                const pulse = 1.0 + Math.sin(time * 0.4 + body.id) * 0.08;
-                                body.userData.sprite.material.opacity = 0.3 * pulse;
+                                const pulse = 1.0 + Math.sin(time * 0.4 + body.id) * 0.06;
+                                body.userData.sprite.material.opacity = pulse;
                             }
                         }
                     });
@@ -3430,7 +3381,7 @@
             // Z/X → radius in/out
             if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x)) {
                 const angularSpeed = 0.025;  // radians per frame
-                const radialSpeed = 3;       // units per frame
+                const radialSpeed = 30;       // units per frame
                 
                 // W/S: pitch — rotate cursorDir and cursorUp around local right axis
                 if (keys.w || keys.s) {
