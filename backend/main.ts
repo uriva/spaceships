@@ -46,7 +46,7 @@ PATROL <ships> BETWEEN [x, y, z] AND [x, y, z]
 FOLLOW <ships> TARGET <ship_name> DISTANCE <number>
 FOLLOW <ships> TARGET CROSSHAIR DISTANCE <number>  — ships continuously follow the player's crosshair/cursor position. Use for "follow my cursor", "follow the crosshair", "follow where I'm pointing", "come to me", "follow my marker"
 FOLLOW <ships> TARGET CAMERA DISTANCE <number>  — ships continuously follow the camera position
-ATTACK <ships> TARGET <position_or_nearest_asteroid>
+ATTACK <ships> TARGET <position_or_nearest_asteroid_or_enemy> — examples: "ATTACK all TARGET enemy", "ATTACK selected TARGET [100,200,300]", "ATTACK 1-5 TARGET enemy"
 
 For questions/info requests, use MSG: prefix to respond in plain text.
 The [CONTEXT] block has live ship data - use it to answer questions about fuel, position, status, etc.
