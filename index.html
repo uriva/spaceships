@@ -2949,6 +2949,7 @@
                     const strength = G_eff * asteroid.userData.mass / distSq;
                     gravAccel.add(toBody.normalize().multiplyScalar(strength));
                 });
+                data.gravityMag = gravAccel.length(); // Save for HUD
                 data.velocity.add(gravAccel);
                 
                 // Apply physics: accelerate toward target velocity
@@ -3171,7 +3172,8 @@
                     const speed = Math.round(obj.userData.velocity.length() * KM_PER_UNIT * 60);  // km/s (assuming 60fps)
                     const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
                     const sizeM = Math.round(avgScale * KM_PER_UNIT * 1000);
-                    display.innerHTML = `${obj.userData.name} <span style="color:#888">${sizeM}m</span> <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
+                    const gForce = obj.userData.gravityMag ? (obj.userData.gravityMag * 360000).toFixed(2) : "0.00";
+                    display.innerHTML = `${obj.userData.name} <span style="color:#888">${sizeM}m</span> <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#bb88ff">G:${gForce}m/s²</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
                 } else if (obj.userData.type === 'asteroid') {
                     const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
