@@ -730,7 +730,7 @@
         const dustMaterial = new THREE.MeshBasicMaterial({ color: 0xa89f91, transparent: true, opacity: 0.8, depthWrite: false });
 
         function spawnDust(position, normal, force) {
-            const count = Math.min(100, Math.max(10, Math.floor(Math.abs(force) * 500)));
+            const count = Math.min(300, Math.max(30, Math.floor(Math.abs(force) * 1500)));
             for (let i = 0; i < count; i++) {
                 let p;
                 if (dustPool.length > 0) {
@@ -747,10 +747,10 @@
                 );
                 
                 // Random velocity biased by normal
-                const outward = normal.clone().multiplyScalar(Math.random() * Math.abs(force) * 2.5);
+                const outward = normal.clone().multiplyScalar(Math.random() * Math.abs(force) * 5.0);
                 const randomVel = new THREE.Vector3(
                     (Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)
-                ).normalize().multiplyScalar(Math.random() * Math.abs(force) * 1.5);
+                ).normalize().multiplyScalar(Math.random() * Math.abs(force) * 3.5);
                 
                 p.userData = {
                     velocity: outward.add(randomVel),
@@ -758,7 +758,7 @@
                 };
                 p.userData.maxLife = p.userData.life;
                 p.material.opacity = 0.8;
-                p.scale.setScalar(Math.random() * 1.5 + 0.5);
+                p.scale.setScalar(Math.random() * 2.5 + 1.0);
                 dustParticles.push(p);
             }
         }
@@ -1708,6 +1708,28 @@
             }
         }
         
+        function createShipExplosion(position) {
+            const count = 50;
+            for (let i = 0; i < count; i++) {
+                const geo = new THREE.SphereGeometry(1.5, 4, 4);
+                const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 1 });
+                const p = new THREE.Mesh(geo, mat);
+                p.position.copy(position).add(
+                    new THREE.Vector3((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4)
+                );
+                const randomVel = new THREE.Vector3(
+                    (Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)
+                ).normalize().multiplyScalar(Math.random() * 2.0);
+                p.userData = {
+                    velocity: randomVel,
+                    life: 1.0 + Math.random()
+                };
+                p.userData.maxLife = p.userData.life;
+                scene.add(p);
+                dustParticles.push(p);
+            }
+        }
+        
         function createSingleSpaceship(config, index) {
             const ship = new THREE.Group();
             const s = 0.3;  // Scale factor
@@ -2048,6 +2070,8 @@
                 mass: SHIP_MASS,
                 weapons: WEAPON_CHARGES,
                 maxWeapons: WEAPON_CHARGES,
+                hp: 100,
+                maxHp: 100,
                 velocity: new THREE.Vector3(0, 0, 0),
                 targetVelocity: new THREE.Vector3(0, 0, 0),
                 isAccelerating: false,
@@ -2964,29 +2988,65 @@
             }, 1000);
         }
         
-        function fireLaser(target) {
-            if (selectedShipIndex < 0 || !spaceships[selectedShipIndex]) return;
+        // Overloaded function to handle both player clicking and AI firing
+        function fireLaser(shooterOrTarget, optionalTarget) {
+            let ship, target;
+            if (optionalTarget) {
+                ship = shooterOrTarget;
+                target = optionalTarget;
+            } else {
+                if (selectedShipIndex < 0 || !spaceships[selectedShipIndex]) return;
+                ship = spaceships[selectedShipIndex];
+                target = shooterOrTarget;
+            }
             
-            const ship = spaceships[selectedShipIndex];
             const shipData = ship.userData;
             
             // Check if ship has enough weapons energy
             const WEAPON_COST = 8;
             if (shipData.weapons < WEAPON_COST) {
-                // Not enough weapons energy - can't fire
                 return;
             }
             
-            // Deplete weapons
             shipData.weapons = Math.max(0, shipData.weapons - WEAPON_COST);
-            
-            // Toast when weapons run out
-            if (shipData.weapons <= 0 && !shipData.weaponsDepleted) {
+            if (shipData.weapons <= 0 && !shipData.weaponsDepleted && shipData.team !== 'enemy') {
                 shipData.weaponsDepleted = true;
                 showToast(`${shipData.name} — WEAPONS DEPLETED`, 'danger');
             }
             
-            // Create laser beam
+            // Damage calculation
+            if (target.userData && target.userData.type === 'spaceship') {
+                target.userData.hp -= 20; // Takes 5 shots to kill
+                
+                if (target.userData.hp <= 0) {
+                    // Destroy ship
+                    createShipExplosion(target.position);
+                    
+                    if (target.userData.name) {
+                        if (target.userData.team === 'enemy') {
+                            showToast(`ENEMY DESTROYED: ${target.userData.name}`, 'success');
+                        } else {
+                            showToast(`MAYDAY: ${target.userData.name} DESTROYED`, 'danger');
+                        }
+                    }
+                    
+                    // Remove from scene and arrays
+                    scene.remove(target);
+                    if (target.userData.trail && target.userData.trail.line) {
+                        scene.remove(target.userData.trail.line);
+                    }
+                    
+                    const idx = spaceships.indexOf(target);
+                    if (idx >= 0) spaceships.splice(idx, 1);
+                    
+                    removeFromSelection(target);
+                    if (target === selectedObject) {
+                        selectedObject = null;
+                        if (spaceships.length > 0) selectShip(0);
+                    }
+                }
+            }
+            
             const startPos = ship.position.clone();
             const endPos = target.position.clone();
             const distance = startPos.distanceTo(endPos);
@@ -4646,6 +4706,45 @@
             const BEHAVIOR_SPEED = 0.15;
             const ARRIVAL_THRESHOLD = 2;
             const EFFECTIVE_BRAKE = THRUST;  // braking is same engine as acceleration
+            
+            // First process AI for ships that don't have user orders
+            spaceships.forEach(ship => {
+                const data = ship.userData;
+                // If ship doesn't have a specific manual order or is an enemy, let it fight
+                if (!data.behavior || data.behavior.type === 'orbit' || data.behavior.type === 'idle' || data.team === 'enemy') {
+                    // Find closest enemy
+                    let nearestEnemy = null;
+                    let nearestDist = Infinity;
+                    
+                    spaceships.forEach(otherShip => {
+                        if (otherShip.userData.team !== data.team) {
+                            const d = ship.position.distanceTo(otherShip.position);
+                            if (d < nearestDist) {
+                                nearestDist = d;
+                                nearestEnemy = otherShip;
+                            }
+                        }
+                    });
+                    
+                    if (nearestEnemy) {
+                        const distKm = nearestDist * KM_PER_UNIT;
+                        
+                        // If enemy is within 200km (~2000 units), attack
+                        if (distKm < 200) {
+                            data.behavior = {
+                                type: 'attack',
+                                target: nearestEnemy
+                            };
+                        } else if (data.team === 'enemy' && !data.behavior) {
+                            // Enemy ships naturally drift towards players if too far
+                            data.behavior = {
+                                type: 'move',
+                                target: nearestEnemy.position.clone()
+                            };
+                        }
+                    }
+                }
+            });
             
             spaceships.forEach(ship => {
                 const data = ship.userData;
