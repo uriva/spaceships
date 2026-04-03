@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Void Command - 3D Space Strategy</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23080818'/%3E%3Cpolygon points='32,8 22,44 32,38 42,44' fill='%2300ccff' opacity='0.9'/%3E%3Cpolygon points='32,38 22,44 18,48 32,44 46,48 42,44' fill='%230088bb' opacity='0.7'/%3E%3Ccircle cx='32' cy='28' r='2' fill='%23fff' opacity='0.9'/%3E%3Ccircle cx='14' cy='14' r='1' fill='%23fff' opacity='0.4'/%3E%3Ccircle cx='50' cy='10' r='1' fill='%23fff' opacity='0.3'/%3E%3Ccircle cx='52' cy='50' r='1' fill='%23fff' opacity='0.5'/%3E%3Ccircle cx='10' cy='54' r='1' fill='%23fff' opacity='0.3'/%3E%3C/svg%3E">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
         
@@ -591,6 +592,15 @@
     <div class="instructions">
         <h3>Command Interface</h3>
         <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
+            <label style="display: flex; justify-content: space-between;">
+                <span>SCENE</span>
+            </label>
+            <select id="scene-selector" style="width: 100%; margin-top: 8px; background: rgba(0,10,20,0.9); color: #00ffff; border: 1px solid rgba(0,255,255,0.3); padding: 4px 8px; font-family: 'Orbitron', sans-serif; font-size: 10px; cursor: pointer; outline: none;">
+                <option value="team-vs-team">Team vs Team</option>
+                <option value="solo-explorer">Solo Explorer</option>
+            </select>
+        </div>
+        <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
             <label for="gravity-slider" style="display: flex; justify-content: space-between;">
                 <span>GRAVITY MULTIPLIER</span>
                 <span id="gravity-label" style="color: #00ffff; font-weight: bold;">1e9</span>
@@ -604,6 +614,7 @@
         <p><span class="key">SPACE</span> look around</p>
         <p><span class="key">P</span> cycle asteroids</p>
         <p><span class="key">C</span> focus crosshair</p>
+        <p><span class="key">F</span> camera follow</p>
         <p><span class="key">/</span> command input</p>
         <p id="mode-label" style="margin-top: 6px; font-size: 12px; color: #aaddff; text-transform: uppercase; letter-spacing: 1px;">Orbit</p>
     </div>
@@ -698,6 +709,7 @@
         let targetCameraPosition = new THREE.Vector3(40, 30, 40);
         let targetCameraTarget = new THREE.Vector3(0, 0, 0);
         let isCameraTransitioning = false;
+        let cameraFollowTarget = null;  // object the camera orbit center tracks each frame
         const CAMERA_LERP_SPEED = 0.04;
         let isDragging = false;
         let dragStart = { x: 0, y: 0 };
@@ -790,7 +802,7 @@
             camera = new THREE.PerspectiveCamera(
                 60,
                 window.innerWidth / window.innerHeight,
-                1.0,
+                0.1,
                 100000
             );
             updateCameraPosition();
@@ -832,9 +844,16 @@
             // Global list of occupied positions to prevent overlaps
             window.occupiedPositions = [];
             
-            createSpaceships();
-            createAsteroids();
-            createBoundarySphere();
+            // Load initial scene
+            loadScene('team-vs-team');
+            
+            // Wire up scene selector
+            const sceneSelector = document.getElementById('scene-selector');
+            sceneSelector.addEventListener('change', (e) => {
+                loadScene(e.target.value);
+            });
+            sceneSelector.addEventListener('keydown', (e) => e.stopPropagation());
+            sceneSelector.addEventListener('keyup', (e) => e.stopPropagation());
             
             // 3D cursor beams — two red lines from engagement sphere edges
             const adaptiveBlend = {
@@ -1555,20 +1574,52 @@
                     
                     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
                     
-                    // Tilt the ring
-                    ring.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
-                    ring.rotation.y = (Math.random() - 0.5) * 0.5;
-                    
-                    planet.add(ring);
-                }
+                // Tilt the ring
+                ring.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+                ring.rotation.y = (Math.random() - 0.5) * 0.5;
                 
-                planet.userData = {
-                    type: 'planet',
-                    rotationSpeed: (Math.random() - 0.5) * 0.002,
-                    planetType: planetType.name
+                planet.add(ring);
+            }
+            
+            // Add moons with some probability
+            const numMoons = Math.random() > 0.4 ? Math.floor(Math.random() * 4) : 0;
+            const moons = [];
+            for (let m = 0; m < numMoons; m++) {
+                const moonSize = planetSize * (0.05 + Math.random() * 0.15);
+                const moonGeo = new THREE.SphereGeometry(moonSize, 16, 16);
+                const moonColor = new THREE.Color(0x888888).lerp(new THREE.Color(0xffffff), Math.random());
+                const moonMat = new THREE.MeshBasicMaterial({ color: moonColor, fog: false });
+                const moon = new THREE.Mesh(moonGeo, moonMat);
+                
+                const moonDist = planetSize * (1.5 + Math.random() * 3);
+                const moonAngle = Math.random() * Math.PI * 2;
+                const moonOrbitSpeed = (Math.random() > 0.5 ? 1 : -1) * (0.005 + Math.random() * 0.015);
+                
+                moon.userData = {
+                    distance: moonDist,
+                    angle: moonAngle,
+                    speed: moonOrbitSpeed
                 };
                 
-                starFieldGroup.add(planet);
+                // Position relative to planet
+                moon.position.set(
+                    Math.cos(moonAngle) * moonDist,
+                    (Math.random() - 0.5) * moonDist * 0.5,
+                    Math.sin(moonAngle) * moonDist
+                );
+                
+                planet.add(moon);
+                moons.push(moon);
+            }
+            
+            planet.userData = {
+                type: 'planet',
+                rotationSpeed: (Math.random() - 0.5) * 0.002,
+                planetType: planetType.name,
+                moons: moons
+            };
+            
+            starFieldGroup.add(planet);
                 celestialBodies.push(planet);
             }
             
@@ -1598,6 +1649,149 @@
         
         function registerPosition(pos, radius) {
             window.occupiedPositions.push({ pos: pos.clone(), radius: radius });
+        }
+        
+        // ─── Scene System ───────────────────────────────────────────
+        let currentScene = 'team-vs-team';
+        
+        function clearGameObjects() {
+            // Deselect everything
+            deselectAll();
+            selectedShipIndex = -1;
+            cameraFollowTarget = null;
+            
+            // Remove ships and their trails
+            spaceships.forEach(ship => {
+                if (ship.userData.trail && ship.userData.trail.line) {
+                    scene.remove(ship.userData.trail.line);
+                    ship.userData.trail.line.geometry.dispose();
+                    ship.userData.trail.line.material.dispose();
+                }
+                scene.remove(ship);
+            });
+            spaceships.length = 0;
+            
+            // Remove asteroids
+            asteroids.forEach(a => {
+                scene.remove(a);
+                a.geometry.dispose();
+                a.material.dispose();
+            });
+            asteroids.length = 0;
+            
+            // Remove lasers
+            lasers.forEach(l => {
+                scene.remove(l.line);
+                l.line.geometry.dispose();
+                l.line.material.dispose();
+            });
+            lasers.length = 0;
+            
+            // Remove dust particles
+            dustParticles.forEach(p => {
+                scene.remove(p);
+                p.geometry.dispose();
+                p.material.dispose();
+            });
+            dustParticles.length = 0;
+            
+            // Remove boundary sphere
+            const boundary = scene.getObjectByName('boundarySphere');
+            if (boundary) scene.remove(boundary);
+            
+            // Clear selection indicators
+            document.getElementById('selection-indicators').innerHTML = '';
+            
+            // Reset occupied positions
+            window.occupiedPositions = [];
+        }
+        
+        function loadScene(sceneName) {
+            clearGameObjects();
+            currentScene = sceneName;
+            
+            if (sceneName === 'team-vs-team') {
+                createSpaceships();
+                createAsteroids();
+                createBoundarySphere();
+                // Camera to a good overview position
+                camOrbitCenter.set(0, 0, 0);
+                camSphereRadius = new THREE.Vector3(400, 300, 400).length();
+                camSphereDir.set(1, 0.6, 1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
+            } else if (sceneName === 'solo-explorer') {
+                // One player ship at origin
+                const config = {
+                    x: 0, y: 0, z: 1200,
+                    color: 0x44aaff,
+                    team: 'player',
+                    name: 'Explorer-01'
+                };
+                const ship = createSingleSpaceship(config, 0);
+                ship.position.set(config.x, config.y, config.z);
+                registerPosition(new THREE.Vector3(config.x, config.y, config.z), 3);
+                spaceships.push(ship);
+                scene.add(ship);
+                
+                // Create trail for the ship
+                const TRAIL_LENGTH = 60;
+                const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                const trailColors = new Float32Array(TRAIL_LENGTH * 4);
+                const trailGeometry = new THREE.BufferGeometry();
+                trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
+                const trailMaterial = new THREE.ShaderMaterial({
+                    vertexShader: `
+                        attribute vec4 customColor;
+                        varying vec4 vColor;
+                        void main() {
+                            vColor = customColor;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        varying vec4 vColor;
+                        void main() {
+                            gl_FragColor = vColor;
+                        }
+                    `,
+                    transparent: true,
+                    depthWrite: false,
+                    blending: THREE.AdditiveBlending
+                });
+                const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                trailLine.frustumCulled = false;
+                scene.add(trailLine);
+                ship.userData.trail = {
+                    line: trailLine,
+                    positions: [],
+                    maxLength: TRAIL_LENGTH,
+                };
+                
+                // Select it
+                selectShip(0);
+                
+                // One large asteroid at origin
+                createSingleAsteroid({ scale: 800, position: new THREE.Vector3(0, 0, 0) });
+                
+                createBoundarySphere();
+                
+                // Camera behind the ship, looking at the asteroid
+                camOrbitCenter.set(0, 0, 1200);
+                camSphereRadius = 500;
+                camSphereDir.set(0, 0.3, 1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
+            }
+            
+            addChatMsg(`Scene: ${sceneName.replace(/-/g, ' ')}`, 'system');
         }
         
         function createSpaceships() {
@@ -2055,7 +2249,7 @@
             // === SELECTION RING ===
             const ringGeometry = new THREE.TorusGeometry(2, 0.04, 8, 32);
             const ringMaterial = new THREE.MeshBasicMaterial({
-                color: config.color, transparent: true, opacity: 0
+                color: 0x00ffff, transparent: true, opacity: 0
             });
             const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
             selectionRing.rotation.x = Math.PI / 2;
@@ -2280,6 +2474,107 @@
             
         }
         
+        // Create a single asteroid with explicit options
+        function createSingleAsteroid(opts = {}) {
+            const shapeType = opts.shapeType !== undefined ? opts.shapeType : Math.random();
+            
+            // Spectral type coloring
+            const asteroidType = Math.random();
+            let baseR, baseG, baseB, metalness;
+            if (asteroidType < 0.75) {
+                const shade = 0.08 + Math.random() * 0.12;
+                baseR = shade + Math.random() * 0.03;
+                baseG = shade + Math.random() * 0.02;
+                baseB = shade + Math.random() * 0.02;
+                metalness = 0.05;
+            } else if (asteroidType < 0.92) {
+                baseR = 0.25 + Math.random() * 0.15;
+                baseG = 0.2 + Math.random() * 0.1;
+                baseB = 0.12 + Math.random() * 0.08;
+                metalness = 0.15;
+            } else {
+                const shade = 0.25 + Math.random() * 0.15;
+                baseR = shade; baseG = shade; baseB = shade + Math.random() * 0.03;
+                metalness = 0.6;
+            }
+            const asteroidColor = new THREE.Color(baseR, baseG, baseB);
+            
+            const detail = 5;
+            let geometry = new THREE.IcosahedronGeometry(1, detail);
+            const positions = geometry.attributes.position;
+            const colors = new Float32Array(positions.count * 3);
+            const seed1 = Math.random() * 100;
+            const seed2 = Math.random() * 100;
+            
+            for (let j = 0; j < positions.count; j++) {
+                let x = positions.getX(j);
+                let y = positions.getY(j);
+                let z = positions.getZ(j);
+                const angle1 = Math.atan2(z, x);
+                const angle2 = Math.acos(y / Math.sqrt(x*x + y*y + z*z + 0.001));
+                const ridge = Math.abs(Math.sin(angle1 * 5 + angle2 * 3 + seed1)) * 0.3;
+                const crater = Math.max(0, Math.sin(angle1 * 8 + seed2) * Math.sin(angle2 * 6 + seed1)) * 0.2;
+                const coarse = (Math.sin(angle1 * 3 + seed1) * Math.cos(angle2 * 3 + seed2)) * 0.15;
+                const fine = (Math.sin(x * 15.3 + seed1) * Math.cos(y * 13.7 + seed2) * Math.sin(z * 17.1)) * 0.04;
+                const displacement = 1.0 + ridge - crater + coarse + fine;
+                positions.setXYZ(j, x * displacement, y * displacement, z * displacement);
+                const colorVariation = (displacement - 1.0) * 0.4 + (Math.random() - 0.5) * 0.15;
+                colors[j * 3] = Math.max(0, Math.min(1, asteroidColor.r + colorVariation));
+                colors[j * 3 + 1] = Math.max(0, Math.min(1, asteroidColor.g + colorVariation));
+                colors[j * 3 + 2] = Math.max(0, Math.min(1, asteroidColor.b + colorVariation));
+            }
+            geometry.computeVertexNormals();
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                emissive: asteroidColor,
+                emissiveIntensity: 0.05,
+                roughness: 0.85 + Math.random() * 0.15,
+                metalness: metalness,
+                flatShading: true
+            });
+            
+            const asteroid = new THREE.Mesh(geometry, material);
+            const scale = opts.scale || 100;
+            const pos = opts.position || new THREE.Vector3(0, 0, 0);
+            
+            asteroid.position.copy(pos);
+            
+            // Apply scale with slight variation
+            const variation = 0.9 + Math.random() * 0.2;
+            asteroid.scale.set(scale * variation, scale, scale * variation);
+            
+            asteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+            asteroid.castShadow = true;
+            asteroid.receiveShadow = true;
+            
+            const rx = asteroid.scale.x * 100;
+            const ry = asteroid.scale.y * 100;
+            const rz = asteroid.scale.z * 100;
+            const volumeM3 = (4 / 3) * Math.PI * rx * ry * rz;
+            const asteroidMass = volumeM3 * ROCK_DENSITY / 1000;
+            
+            asteroid.userData = {
+                type: 'asteroid',
+                selectable: true,
+                shapeType: shapeType,
+                rotationSpeed: {
+                    x: (Math.random() - 0.5) * 0.003,
+                    y: (Math.random() - 0.5) * 0.003,
+                    z: (Math.random() - 0.5) * 0.003
+                },
+                mass: asteroidMass,
+                velocity: new THREE.Vector3(0, 0, 0)
+            };
+            
+            asteroids.push(asteroid);
+            scene.add(asteroid);
+            registerPosition(pos, scale * 1.5);
+            
+            return asteroid;
+        }
+        
         function createBoundarySphere() {
             const R = 5000;
             const segments = 64;
@@ -2436,6 +2731,11 @@
                 }
                 
                 lastCPressTime = now;
+            }
+            
+            // F key to follow/unfollow target
+            if (!event.ctrlKey && !event.metaKey && (key === 'f' || code === 'KeyF')) {
+                toggleFollowTarget();
             }
             
             if (key === 'z' || code === 'KeyZ') keys.z = true;
@@ -2649,19 +2949,6 @@
                 const ring = obj.getObjectByName('selectionRing');
                 if (ring) ring.material.opacity = 0.8;
             } else if (obj.userData.type === 'asteroid') {
-                // Add ring if not already there
-                if (!obj.getObjectByName('selectionRing')) {
-                    obj.geometry.computeBoundingSphere();
-                    const geoRadius = obj.geometry.boundingSphere.radius;
-                    const ringGeometry = new THREE.TorusGeometry(geoRadius * 1.3, geoRadius * 0.03, 8, 32);
-                    const ringMaterial = new THREE.MeshBasicMaterial({
-                        color: 0xaaaaaa, transparent: true, opacity: 0.8
-                    });
-                    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-                    ring.rotation.x = Math.PI / 2;
-                    ring.name = 'selectionRing';
-                    obj.add(ring);
-                }
                 if (obj.material) {
                     obj.userData.origEmissiveIntensity = obj.material.emissiveIntensity;
                     obj.material.emissiveIntensity = 0.5;
@@ -2692,8 +2979,6 @@
                 const ring = obj.getObjectByName('selectionRing');
                 if (ring) ring.material.opacity = 0;
             } else if (obj.userData.type === 'asteroid') {
-                const ring = obj.getObjectByName('selectionRing');
-                if (ring) obj.remove(ring);
                 if (obj.material) {
                     obj.material.emissiveIntensity = obj.userData.origEmissiveIntensity || 0.1;
                 }
@@ -2826,6 +3111,9 @@
             const zoomAmount = event.deltaY * zoomSpeed;
             
             cameraPosition.add(forward.multiplyScalar(zoomAmount));
+            // Sync orbit system
+            camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+            camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
             updateCameraPosition();
         }
         
@@ -2914,8 +3202,6 @@
             // Remove asteroid selection rings and restore emissive
             selectedObjects.forEach(obj => {
                 if (obj.userData.type === 'asteroid') {
-                    const ring = obj.getObjectByName('selectionRing');
-                    if (ring) obj.remove(ring);
                     if (obj.material) {
                         obj.material.emissiveIntensity = obj.userData.origEmissiveIntensity || 0.1;
                     }
@@ -2944,6 +3230,24 @@
             
             selectedObjects.forEach((obj, i) => {
                 const indicator = container.children[i];
+                const ring = indicator.querySelector('.selection-ring');
+                
+                let r = 0, g = 255, b = 255; // Default cyan
+                if (obj.userData.type === 'spaceship') {
+                    if (obj.userData.team === 'enemy') {
+                        r = 255; g = 50; b = 50; // Red
+                    } else if (obj.userData.teamColor) {
+                        r = (obj.userData.teamColor >> 16) & 255;
+                        g = (obj.userData.teamColor >> 8) & 255;
+                        b = obj.userData.teamColor & 255;
+                    }
+                } else if (obj.userData.type === 'asteroid') {
+                    r = 170; g = 170; b = 170; // Gray
+                }
+                
+                ring.style.borderColor = `rgb(${r}, ${g}, ${b})`;
+                ring.style.boxShadow = `0 0 20px rgba(${r}, ${g}, ${b}, 0.5), inset 0 0 20px rgba(${r}, ${g}, ${b}, 0.1)`;
+
                 const vector = obj.position.clone();
                 vector.project(camera);
                 
@@ -2968,6 +3272,27 @@
                 target: position.clone()
             };
             showTargetMarker(position, 'move');
+        }
+        
+        function toggleFollowTarget() {
+            // If already following, unfollow
+            if (cameraFollowTarget) {
+                addChatMsg('Camera follow off', 'system');
+                cameraFollowTarget = null;
+                return;
+            }
+            
+            // Follow the selected object (ship or asteroid)
+            if (!selectedObject) {
+                addChatMsg('Nothing selected to follow', 'system');
+                return;
+            }
+            
+            cameraFollowTarget = selectedObject;
+            const name = selectedObject.userData.name || 'object';
+            addChatMsg(`Camera following ${name}`, 'system');
+            // Transition camera to look at it
+            focusOnSelected(false);
         }
         
         function showTargetMarker(position, type) {
@@ -3122,6 +3447,33 @@
                     }
                 }
                 
+                // ── LANDED: stay attached to asteroid surface, skip all physics ──
+                if (data.behavior && data.behavior.type === 'landed') {
+                    const b = data.behavior;
+                    if (!b.asteroid || !b.asteroid.parent) {
+                        // Asteroid destroyed — liftoff into idle drift
+                        data.behavior = null;
+                        return;
+                    }
+                    // Convert local surface position back to world space
+                    // (tracks asteroid rotation automatically)
+                    const worldPos = b.surfaceLocalPos.clone();
+                    b.asteroid.localToWorld(worldPos);
+                    ship.position.copy(worldPos);
+                    // Orient ship: nose aligned with surface normal (standing on surface)
+                    const worldNormal = b.surfaceNormal.clone()
+                        .applyQuaternion(b.asteroid.quaternion).normalize();
+                    // Place ship slightly above surface along normal
+                    ship.position.add(worldNormal.clone().multiplyScalar(1.5));
+                    // Face outward from asteroid
+                    ship.lookAt(ship.position.clone().add(worldNormal));
+                    data.velocity.set(0, 0, 0);
+                    data.gravityMag = 0;
+                    data.isAccelerating = false;
+                    data.isBraking = false;
+                    return; // skip all other physics
+                }
+                
                 // Get current velocity magnitude
                 const speed = data.velocity.length();
                 const targetSpeed = data.targetVelocity.length();
@@ -3260,6 +3612,9 @@
                 }
                 
                 // Elastic collision with asteroids — ellipsoid-aware, respects rotation
+                // Speed thresholds determine outcome: land / bounce / crash
+                const LAND_SPEED = 0.03;   // below this: soft landing (~300 m/s)
+                const CRASH_SPEED = 0.15;  // above this: fatal impact (~1.5 km/s)
                 const shipRadius = 2;
                 for (const asteroid of asteroids) {
                     // Vector from asteroid center to ship (world space)
@@ -3291,17 +3646,52 @@
                         
                         const vDotN = data.velocity.dot(worldNormal);
                         if (vDotN < 0) { // only act if moving into the surface
-                            // Push ship to ellipsoid surface: scale localPos so it lands on the surface
+                            const impactSpeed = Math.abs(vDotN);
+                            
+                            // Push ship to ellipsoid surface
                             const pushFactor = 1 / Math.sqrt(ellipDist);
                             const surfaceLocal = localPos.clone().multiplyScalar(pushFactor);
-                            // Rotate surface point back to world and offset from asteroid center
-                            ship.position.copy(asteroid.position).add(surfaceLocal.applyQuaternion(asteroid.quaternion));
-                            // Reflect velocity: v' = v - 2(v·n)n, then dampen
-                            data.velocity.sub(worldNormal.clone().multiplyScalar(2 * vDotN));
-                            data.velocity.multiplyScalar(0.7); // 30% energy loss
-                            // Clear move behavior so it doesn't ram back in
-                            if (data.behavior && data.behavior.type === 'move') {
-                                data.behavior = null;
+                            ship.position.copy(asteroid.position).add(surfaceLocal.clone().applyQuaternion(asteroid.quaternion));
+                            
+                            if (impactSpeed > CRASH_SPEED) {
+                                // ── CRASH: ship destroyed ──
+                                createShipExplosion(ship.position);
+                                const astName = asteroid.userData.name || 'asteroid';
+                                showToast(`${data.name} CRASHED into ${astName}`, 'danger');
+                                
+                                scene.remove(ship);
+                                if (data.trail && data.trail.line) {
+                                    scene.remove(data.trail.line);
+                                }
+                                const idx = spaceships.indexOf(ship);
+                                if (idx >= 0) spaceships.splice(idx, 1);
+                                removeFromSelection(ship);
+                                if (ship === selectedObject) {
+                                    selectedObject = null;
+                                    if (spaceships.length > 0) selectShip(0);
+                                }
+                                break; // ship is gone
+                                
+                            } else if (impactSpeed < LAND_SPEED) {
+                                // ── LAND: gentle touchdown ──
+                                data.velocity.set(0, 0, 0);
+                                data.behavior = {
+                                    type: 'landed',
+                                    asteroid: asteroid,
+                                    surfaceLocalPos: surfaceLocal.clone(), // position on asteroid in local frame
+                                    surfaceNormal: worldNormal.clone(),
+                                };
+                                const astName = asteroid.userData.name || 'asteroid';
+                                shipReport(data, 'landed', `Landed on ${astName}`);
+                                break;
+                                
+                            } else {
+                                // ── BOUNCE: elastic collision ──
+                                data.velocity.sub(worldNormal.clone().multiplyScalar(2 * vDotN));
+                                data.velocity.multiplyScalar(0.7); // 30% energy loss
+                                if (data.behavior && data.behavior.type === 'move') {
+                                    data.behavior = null;
+                                }
                             }
                         }
                     }
@@ -3441,15 +3831,30 @@
                     const fuelT = Math.round(obj.userData.fuel);
                     
                     // Calculate fuel burn rate (tonnes per second). 60 frames per second.
-                    let burnRate = 0;
-                    if (obj.userData.isAccelerating || obj.userData.isBraking) {
-                        burnRate = 0.4 * 60; // 0.4t per frame * 60fps = 24t/s
-                    }
+                    const isThrusting = obj.userData.isAccelerating || obj.userData.isBraking;
+                    const burnRate = isThrusting ? FUEL_COST_PER_FRAME * 60 : 0; // t/s
                     const burnStr = burnRate > 0 ? ` <span style="color:#ff5555">-${burnRate}t/s</span>` : '';
+                    const engineStatus = isThrusting ? 
+                        `<span style="color:#ff8800">${burnRate}t/s</span>` : 
+                        `<span style="color:#555;">IDLE</span>`;
                     
                     const wpnPct = Math.round(obj.userData.weapons / obj.userData.maxWeapons * 100);
                     const speedRaw = obj.userData.velocity.length() * KM_PER_UNIT * 60;  // km/s (assuming 60fps)
                     const speedStr = speedRaw < 1 ? `${Math.round(speedRaw * 1000)}m/s` : `${Math.round(speedRaw)}km/s`;
+                    const behaviorType = obj.userData.behavior ? obj.userData.behavior.type : null;
+                    const statusStr = behaviorType === 'landed'
+                        ? `<span style="color:#00ff88">LANDED on ${obj.userData.behavior.asteroid?.userData?.name || 'asteroid'}</span>`
+                        : behaviorType === 'orbit'
+                        ? `<span style="color:#88ccff">ORBITING ${obj.userData.behavior.body?.userData?.name || 'body'}</span>`
+                        : behaviorType === 'fuelCritical'
+                        ? `<span style="color:#ff0000">FUEL CRITICAL</span>`
+                        : behaviorType === 'attack'
+                        ? `<span style="color:#ff4444">ATTACKING</span>`
+                        : behaviorType === 'move'
+                        ? `<span style="color:#ffcc00">MOVING</span>`
+                        : behaviorType === 'patrol'
+                        ? `<span style="color:#ffcc00">PATROLLING</span>`
+                        : `<span style="color:#555;">IDLE</span>`;
                     const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
                     const sizeM = Math.round(avgScale * KM_PER_UNIT * 1000);
                     const gForce = obj.userData.gravityMag ? (obj.userData.gravityMag * 360000).toFixed(2) : "0.00";
@@ -3464,6 +3869,11 @@
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">FUEL</span>
                             <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">${fuelT}t (${fuelPct}%)${burnStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">ENGINE</span>
+                            ${engineStatus}
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
@@ -3484,6 +3894,11 @@
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">SPEED</span>
                             <span style="color:#fff;">${speedStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">STATUS</span>
+                            ${statusStr}
                         </div>
                     </div>`;
                 } else if (obj.userData.type === 'asteroid') {
@@ -3798,6 +4213,14 @@
         function updateKeyboardControls() {
             // Any WASD/ZX input cancels camera transition
             if (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x) {
+                if (isCameraTransitioning) {
+                    // Snap orbit center to transition target so zoom goes toward the right place
+                    cameraTarget.copy(targetCameraTarget);
+                    camOrbitCenter.copy(targetCameraTarget);
+                    camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
+                    camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+                    camera.lookAt(cameraTarget);
+                }
                 isCameraTransitioning = false;
             }
             
@@ -4310,6 +4733,21 @@
             }
             
             applyCameraTransition();
+            
+            // Camera follow: track the target each frame
+            if (cameraFollowTarget) {
+                // If target was removed from the scene, stop following
+                if (!cameraFollowTarget.parent) {
+                    cameraFollowTarget = null;
+                } else {
+                    const delta = cameraFollowTarget.position.clone().sub(camOrbitCenter);
+                    camOrbitCenter.add(delta);
+                    cameraPosition.add(delta);
+                    cameraTarget.add(delta);
+                    updateCameraPosition();
+                }
+            }
+            
             updateKeyboardControls();
             updateShipBehaviors();
             updateSpaceships();
@@ -4491,10 +4929,16 @@
                     }
                     const shipsSpec = tokens.slice(1, toIdx + 1).join(' ').replace(/\bto\b/i, '').trim() || 'selected';
                     const posStr = tokens.slice(toIdx + 1).join(' ');
-                    const ships = findShips(shipsSpec);
+                    
                     const pos = parsePosition(posStr);
-                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
                     if (!pos) return { error: `Invalid position: "${posStr}"` };
+
+                    if (shipsSpec.toLowerCase() === 'cursor' || shipsSpec.toLowerCase() === 'crosshair') {
+                        return { cmd: 'CURSOR', target: pos };
+                    }
+                    
+                    const ships = findShips(shipsSpec);
+                    if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
                     return { cmd: 'MOVE', ships, target: pos };
                 }
                 case 'STOP': {
@@ -4512,7 +4956,19 @@
                     const shipsSpec = tokens.slice(1, aroundIdx).join(' ');
                     const posEnd = radiusIdx > 0 ? radiusIdx : tokens.length;
                     const posStr = tokens.slice(aroundIdx + 1, posEnd).join(' ');
-                    const radius = radiusIdx > 0 ? parseFloat(tokens[radiusIdx + 1]) : 20;
+                    const radius = radiusIdx > 0 ? parseFloat(tokens[radiusIdx + 1]) / KM_PER_UNIT : null;
+
+                    if (shipsSpec.toLowerCase() === 'cursor' || shipsSpec.toLowerCase() === 'crosshair') {
+                        const targetObj = findShip(posStr);
+                        if (targetObj) {
+                            return { cmd: 'CURSOR', target: targetObj.position.clone() };
+                        } else {
+                            const pos = parsePosition(posStr);
+                            if (pos) return { cmd: 'CURSOR', target: pos };
+                            return { error: `Invalid cursor target: "${posStr}"` };
+                        }
+                    }
+
                     const ships = findShips(shipsSpec);
                     const pos = parsePosition(posStr);
                     if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
@@ -4527,6 +4983,18 @@
                     const shipsSpec = tokens.slice(1, betweenIdx).join(' ');
                     const pos1Str = tokens.slice(betweenIdx + 1, andIdx).join(' ');
                     const pos2Str = tokens.slice(andIdx + 1).join(' ');
+
+                    if (shipsSpec.toLowerCase() === 'cursor' || shipsSpec.toLowerCase() === 'crosshair') {
+                        const targetObj = findShip(pos1Str);
+                        if (targetObj) {
+                            return { cmd: 'CURSOR', target: targetObj.position.clone() };
+                        } else {
+                            const pos = parsePosition(pos1Str);
+                            if (pos) return { cmd: 'CURSOR', target: pos };
+                            return { error: `Invalid cursor target: "${pos1Str}"` };
+                        }
+                    }
+
                     const ships = findShips(shipsSpec);
                     const pos1 = parsePosition(pos1Str);
                     const pos2 = parsePosition(pos2Str);
@@ -4542,6 +5010,18 @@
                     const shipsSpec = tokens.slice(1, targetIdx).join(' ');
                     const targetSpec = tokens.slice(targetIdx + 1, distIdx > 0 ? distIdx : tokens.length).join(' ');
                     const distance = distIdx > 0 ? parseFloat(tokens[distIdx + 1]) : 10;
+                    
+                    if (shipsSpec.toLowerCase() === 'cursor' || shipsSpec.toLowerCase() === 'crosshair') {
+                        const targetObj = findShip(targetSpec);
+                        if (targetObj) {
+                            return { cmd: 'CURSOR', target: targetObj.position.clone() };
+                        } else {
+                            const pos = parsePosition(targetSpec);
+                            if (pos) return { cmd: 'CURSOR', target: pos };
+                            return { error: `Invalid cursor target: "${targetSpec}"` };
+                        }
+                    }
+
                     const ships = findShips(shipsSpec);
                     if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
                     
@@ -4576,14 +5056,26 @@
                             shipsSpec = 'selected';
                             targetSpec = tokens[1];
                         } else if (tokens.length >= 3) {
-                            shipsSpec = tokens.slice(1, -1).join(' ');
-                            targetSpec = tokens[tokens.length - 1];
+                            shipsSpec = tokens[1];
+                            targetSpec = tokens.slice(2).join(' ');
                         } else {
                             return { error: 'ATTACK requires a target' };
                         }
                     } else {
-                        shipsSpec = tokens.slice(1, targetIdx).join(' ').trim() || 'selected';
-                        targetSpec = tokens.slice(targetIdx + 1).join(' ').trim();
+                        shipsSpec = tokens.slice(1, targetIdx).join(' ');
+                        if (!shipsSpec) shipsSpec = 'selected';
+                        targetSpec = tokens.slice(targetIdx + 1).join(' ');
+                    }
+
+                    if (shipsSpec.toLowerCase() === 'cursor' || shipsSpec.toLowerCase() === 'crosshair') {
+                        const targetObj = findShip(targetSpec);
+                        if (targetObj) {
+                            return { cmd: 'CURSOR', target: targetObj.position.clone() };
+                        } else {
+                            const pos = parsePosition(targetSpec);
+                            if (pos) return { cmd: 'CURSOR', target: pos };
+                            return { error: `Invalid cursor target: "${targetSpec}"` };
+                        }
                     }
 
                     const ships = findShips(shipsSpec);
@@ -4702,12 +5194,12 @@
                             if (d < nearestDist) { nearestDist = d; nearestAst = a; }
                         });
                         if (!nearestAst) {
-                            addChatMessage('SYSTEM', 'No asteroids found to orbit.');
+                            addChatMsg('No asteroids found to orbit.', 'system');
                             break;
                         }
                         // Default radius: slightly larger than asteroid's average scale
                         const avgScale = (nearestAst.scale.x + nearestAst.scale.y + nearestAst.scale.z) / 3;
-                        const orbitRadius = parsed.radius || (avgScale * 2);
+                        const orbitRadius = parsed.radius || (avgScale * 1.2);
                         data.behavior = {
                             type: 'orbit',
                             body: nearestAst,
@@ -4715,7 +5207,7 @@
                             phase: 'approach',  // approach → inject → freefall
                         };
                         const bodyName = nearestAst.userData.name || 'asteroid';
-                        addChatMessage('SYSTEM', `${data.name}: orbital injection to ${bodyName} at r=${Math.round(orbitRadius)}`);
+                        addChatMsg(`${data.name}: orbital injection to ${bodyName} at r=${Math.round(orbitRadius)}`, 'system');
                         break;
                     }
                     case 'PATROL':
@@ -4815,7 +5307,7 @@
             spaceships.forEach(ship => {
                 const data = ship.userData;
                 // If ship doesn't have a specific manual order or is an enemy, let it fight
-                if (!data.behavior || data.behavior.type === 'orbit' || data.behavior.type === 'idle' || data.team === 'enemy') {
+                if (!data.behavior || data.behavior.type === 'orbit' || data.behavior.type === 'idle' || (data.team === 'enemy' && data.behavior.type !== 'landed')) {
                     // Find closest enemy
                     let nearestEnemy = null;
                     let nearestDist = Infinity;
@@ -4858,13 +5350,13 @@
                 // ── AUTONOMOUS: fuel self-preservation ──
                 // Critical fuel (< 5%): cut all thrust, drift only
                 if (fuelPct < 0.05 && data.fuel > 0) {
-                    if (data.behavior && data.behavior.type !== 'fuelCritical') {
+                    if (data.behavior && data.behavior.type !== 'fuelCritical' && data.behavior.type !== 'landed') {
                         shipReport(data, 'fuelCritical', 'FUEL CRITICAL — cutting engines, drifting');
                         data.behavior = { type: 'fuelCritical' };
                     }
                 }
                 // Low fuel (< 20%): seek orbit around nearest heavy asteroid (mass >= 1e9)
-                else if (fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake') {
+                else if (fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake' && data.behavior.type !== 'landed') {
                     // Find nearest heavy asteroid
                     let nearestHeavy = null, nearestDist = Infinity;
                     asteroids.forEach(a => {
@@ -4874,7 +5366,7 @@
                     });
                     if (nearestHeavy) {
                         const avgScale = (nearestHeavy.scale.x + nearestHeavy.scale.y + nearestHeavy.scale.z) / 3;
-                        const orbitRadius = avgScale * 2;
+                        const orbitRadius = avgScale * 1.2;
                         const astName = nearestHeavy.userData.name || 'massive asteroid';
                         shipReport(data, 'fuelLow', `Fuel at ${Math.round(fuelPct * 100)}% — breaking off, seeking orbit around ${astName}`);
                         data.behavior = {
@@ -5125,6 +5617,12 @@
                         }
                         break;
                     }
+                    case 'landed': {
+                        // Ship is on asteroid surface — do nothing here.
+                        // Physics engine handles surface attachment.
+                        // Any new command (move/orbit/etc.) will overwrite behavior → liftoff.
+                        break;
+                    }
                 }
             });
         }
@@ -5142,7 +5640,7 @@
                 const selNames = selectedObjects.map(o => {
                     if (o.userData.type === 'spaceship') return o.userData.name;
                     if (o.userData.name) return o.userData.name;
-                    return 'Asteroid at [' + Math.round(o.position.x) + ',' + Math.round(o.position.y) + ',' + Math.round(o.position.z) + ']';
+                    return 'Asteroid at [' + Math.round(o.position.x * KM_PER_UNIT) + ',' + Math.round(o.position.y * KM_PER_UNIT) + ',' + Math.round(o.position.z * KM_PER_UNIT) + ']';
                 });
                 ctx += `Currently selected: ${selNames.join(', ')}. `;
             } else {
@@ -5157,6 +5655,8 @@
                 const p = s.position;
                 const d = s.userData;
                 const b = d.behavior ? d.behavior.type : 'idle';
+                const landedOn = (d.behavior && d.behavior.type === 'landed' && d.behavior.asteroid)
+                    ? ` on ${d.behavior.asteroid.userData.name || 'asteroid'}` : '';
                 const spd = d.velocity.length();
                 const spdKmS = Math.round(spd * KM_PER_UNIT * 60); // km/s assuming 60fps
                 let bearing = '';
@@ -5167,7 +5667,7 @@
                     bearing = ` hdg ${Math.round(deg)}°`;
                 }
                 const fuel = `${Math.round(d.fuel)}/${MAX_FUEL}t`;
-                return `${d.name} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] ${b} ${spdKmS}km/s${bearing} fuel:${fuel}`;
+                return `${d.name} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] ${b}${landedOn} ${spdKmS}km/s${bearing} fuel:${fuel}`;
             });
             ctx += `Ships: ${shipStates.join('; ')}. `;
             
@@ -5180,7 +5680,7 @@
                 const p = a.position;
                 const sizeKm = Math.round((a.scale.x + a.scale.y + a.scale.z) / 3 * KM_PER_UNIT);
                 const label = a.userData.name || ('asteroid@[' + Math.round(p.x * KM_PER_UNIT)+','+Math.round(p.y * KM_PER_UNIT)+','+Math.round(p.z * KM_PER_UNIT)+']');
-                return `${label} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] ~${sizeKm}km ${fmtMass(a.userData.mass)}`;
+                return `${label} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] radius~${sizeKm}km ${fmtMass(a.userData.mass)}`;
             });
             ctx += `Asteroids (${asteroids.length}): ${astData.join('; ')}`;
             
@@ -5243,10 +5743,34 @@
             const log = document.getElementById('chat-log');
             log.removeChild(log.lastChild);
             
-            // Handle response
-            const lines = dslResponse.split('\n').filter(l => l.trim());
+            // Handle response — coalesce multi-line MSG blocks
+            const rawLines = dslResponse.split('\n').filter(l => l.trim());
             const errors = [];
             let successCount = 0;
+            
+            // Pre-process: when a line starts with MSG:, join all following
+            // non-command lines into that same message (LLM often returns
+            // multi-line status reports as MSG: followed by plain-text lines).
+            const lines = [];
+            for (let i = 0; i < rawLines.length; i++) {
+                const l = rawLines[i];
+                if (l.startsWith('MSG:')) {
+                    // Collect continuation lines (lines that don't look like a DSL command)
+                    let msg = l.substring(4).trim();
+                    while (i + 1 < rawLines.length) {
+                        const next = rawLines[i + 1].trim();
+                        // A DSL command starts with a known keyword
+                        const firstWord = next.split(/\s+/)[0].toUpperCase();
+                        const DSL_CMDS = ['MOVE','STOP','ORBIT','PATROL','FOLLOW','ATTACK','CURSOR','MSG:'];
+                        if (DSL_CMDS.includes(firstWord) || next.startsWith('MSG:')) break;
+                        msg += '\n' + next;
+                        i++;
+                    }
+                    lines.push('MSG:' + msg);
+                } else {
+                    lines.push(l);
+                }
+            }
             
             for (const line of lines) {
                 if (line.startsWith('MSG:')) {
@@ -5277,7 +5801,25 @@
                 // Remove "Correcting..." message
                 log.removeChild(log.lastChild);
                 
-                const retryLines = retryResponse.split('\n').filter(l => l.trim());
+                const retryRaw = retryResponse.split('\n').filter(l => l.trim());
+                const retryLines = [];
+                for (let i = 0; i < retryRaw.length; i++) {
+                    const l = retryRaw[i];
+                    if (l.startsWith('MSG:')) {
+                        let msg = l.substring(4).trim();
+                        while (i + 1 < retryRaw.length) {
+                            const next = retryRaw[i + 1].trim();
+                            const firstWord = next.split(/\s+/)[0].toUpperCase();
+                            const DSL_CMDS = ['MOVE','STOP','ORBIT','PATROL','FOLLOW','ATTACK','CURSOR','MSG:'];
+                            if (DSL_CMDS.includes(firstWord) || next.startsWith('MSG:')) break;
+                            msg += '\n' + next;
+                            i++;
+                        }
+                        retryLines.push('MSG:' + msg);
+                    } else {
+                        retryLines.push(l);
+                    }
+                }
                 for (const line of retryLines) {
                     if (line.startsWith('MSG:')) {
                         addChatMsg(line.substring(4).trim(), 'computer');
