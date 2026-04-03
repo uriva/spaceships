@@ -2017,18 +2017,12 @@
                 
                 asteroid.position.copy(asteroidPos);
                 
-                // Explicit tier distribution: ~1 massive, a few large, mostly small
+                // Continuous power-law distribution
+                // 1 unit = 100m, so 1000 units = 100km
+                // Formula tuned so ~1 in 40 asteroids reaches near 1000 units
                 const u = Math.random();
-                let scale;
-                if (u < 0.025) {        // ~1 in 40
-                    scale = 4000 + Math.random() * 4000;  // 400km - 800km
-                } else if (u < 0.1) {   // ~3 in 40
-                    scale = 400 + Math.random() * 400;    // 40km - 80km
-                } else if (u < 0.3) {   // ~8 in 40
-                    scale = 80 + Math.random() * 150;     // 8km - 23km
-                } else {                // ~28 in 40
-                    scale = 15 + Math.random() * 40;      // 1.5km - 5.5km
-                }
+                let scale = 15 / Math.pow(u + 0.01, 1.2);
+                scale = Math.max(15, Math.min(1200, scale)); // clamp [1.5km, 120km]
                 
                 // Apply non-uniform scaling based on shape type
                 if (shapeType < 0.15) {
