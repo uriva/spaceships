@@ -2055,7 +2055,7 @@
             // === SELECTION RING ===
             const ringGeometry = new THREE.TorusGeometry(2, 0.04, 8, 32);
             const ringMaterial = new THREE.MeshBasicMaterial({
-                color: 0x44aaff, transparent: true, opacity: 0
+                color: config.color, transparent: true, opacity: 0
             });
             const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
             selectionRing.rotation.x = Math.PI / 2;
@@ -2635,9 +2635,6 @@
         }
         
         function addToSelection(obj) {
-            // Cannot select enemy ships
-            if (obj.userData.type === 'spaceship' && obj.userData.team === 'enemy') return;
-            
             if (selectedObjects.includes(obj)) return;
             selectedObjects.push(obj);
             
@@ -2658,7 +2655,7 @@
                     const geoRadius = obj.geometry.boundingSphere.radius;
                     const ringGeometry = new THREE.TorusGeometry(geoRadius * 1.3, geoRadius * 0.03, 8, 32);
                     const ringMaterial = new THREE.MeshBasicMaterial({
-                        color: 0x44aaff, transparent: true, opacity: 0.8
+                        color: 0xaaaaaa, transparent: true, opacity: 0.8
                     });
                     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
                     ring.rotation.x = Math.PI / 2;
@@ -2746,7 +2743,7 @@
             
             if (!clickedObject) {
                 // Right-clicked on empty space - move command
-                if (selectedShipIndex >= 0) {
+                if (selectedShipIndex >= 0 && spaceships[selectedShipIndex].userData.team !== 'enemy') {
                     const planeIntersects = raycaster.intersectObject(createInvisiblePlane());
                     if (planeIntersects.length > 0) {
                         const point = planeIntersects[0].point;
@@ -2754,7 +2751,7 @@
                         showTargetMarker(point, 'move');
                     }
                 }
-            } else if (clickedObject.userData.type === 'asteroid' && selectedShipIndex >= 0) {
+            } else if (clickedObject.userData.type === 'asteroid' && selectedShipIndex >= 0 && spaceships[selectedShipIndex].userData.team !== 'enemy') {
                 // Right-clicked on asteroid - attack
                 fireLaser(clickedObject);
             }
@@ -2965,6 +2962,7 @@
         function moveShipTo(position) {
             if (selectedShipIndex < 0) return;
             const ship = spaceships[selectedShipIndex];
+            if (ship.userData.team === 'enemy') return;
             ship.userData.behavior = {
                 type: 'move',
                 target: position.clone()
@@ -4442,13 +4440,19 @@
             return [];
         }
         
-        // Parse a position: [x,y,z] or "Ship-01" or "nearest_asteroid"
+        // Parse a position: [x,y,z] in km, or "Ship-01" or "nearest_asteroid"
         function parsePosition(str) {
             str = str.trim();
-            // [x, y, z]
+            // [x, y, z] - Assume input is in km, convert to game units
             const arrMatch = str.match(/\[?\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]?/);
             if (arrMatch) {
-                return new THREE.Vector3(parseFloat(arrMatch[1]), parseFloat(arrMatch[2]), parseFloat(arrMatch[3]));
+                // LLM outputs coordinates in km. 1 unit = 0.1 km, so 1 km = 10 units.
+                // Divide by KM_PER_UNIT (0.1) to convert back to game units.
+                return new THREE.Vector3(
+                    parseFloat(arrMatch[1]) / KM_PER_UNIT, 
+                    parseFloat(arrMatch[2]) / KM_PER_UNIT, 
+                    parseFloat(arrMatch[3]) / KM_PER_UNIT
+                );
             }
             // "nearest_asteroid"
             if (str.toLowerCase().includes('nearest_asteroid')) {
@@ -4632,6 +4636,13 @@
                     
                     return { cmd: 'ATTACK', ships, target: targetObj };
                 }
+                case 'CURSOR': {
+                    const posStr = tokens.slice(1).join(' ').trim();
+                    if (!posStr) return { error: 'CURSOR requires a position or object' };
+                    const pos = parsePosition(posStr);
+                    if (!pos) return { error: `Invalid position: "${posStr}"` };
+                    return { cmd: 'CURSOR', target: pos };
+                }
                 default:
                     return { error: `Unknown command: ${cmd}` };
             }
@@ -4642,9 +4653,33 @@
                 addChatMsg(parsed.error, 'error');
                 return;
             }
+
+            if (parsed.cmd === 'CURSOR') {
+                const target = parsed.target;
+                const len = target.length();
+                cursorRadius = Math.max(0.001, Math.min(WORLD_RADIUS, len));
+                if (len > 0.0001) {
+                    cursorDir.copy(target).normalize();
+                    // Generate a valid 'up' vector for the cursor to prevent pole lock issues when the user takes over
+                    const worldUp = new THREE.Vector3(0, 1, 0);
+                    if (Math.abs(cursorDir.dot(worldUp)) > 0.99) {
+                        cursorUp.set(1, 0, 0);
+                    } else {
+                        const right = new THREE.Vector3().crossVectors(cursorDir, worldUp).normalize();
+                        cursorUp.crossVectors(right, cursorDir).normalize();
+                    }
+                } else {
+                    cursorDir.set(0, 0, 1);
+                    cursorUp.set(0, 1, 0);
+                }
+                cursorPos3D.copy(cursorDir).multiplyScalar(cursorRadius);
+                addChatMsg(`Cursor moved to [${(target.x * KM_PER_UNIT).toFixed(1)},${(target.y * KM_PER_UNIT).toFixed(1)},${(target.z * KM_PER_UNIT).toFixed(1)}] km`);
+                return;
+            }
             
             parsed.ships.forEach((ship, i) => {
                 const data = ship.userData;
+                if (data.team === 'enemy') return; // Cannot command enemy ships
                 
                 switch (parsed.cmd) {
                     case 'MOVE':
@@ -5115,7 +5150,7 @@
             }
             
             // Camera position
-            ctx += `Player at [${Math.round(cursorPos3D.x)},${Math.round(cursorPos3D.y)},${Math.round(cursorPos3D.z)}]. `;
+            ctx += `Player at [${Math.round(cursorPos3D.x * KM_PER_UNIT)},${Math.round(cursorPos3D.y * KM_PER_UNIT)},${Math.round(cursorPos3D.z * KM_PER_UNIT)}]. `;
             
             // Ship positions, states, speed, and bearing
             const shipStates = spaceships.map(s => {
@@ -5132,7 +5167,7 @@
                     bearing = ` hdg ${Math.round(deg)}°`;
                 }
                 const fuel = `${Math.round(d.fuel)}/${MAX_FUEL}t`;
-                return `${d.name} [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ${b} ${spdKmS}km/s${bearing} fuel:${fuel}`;
+                return `${d.name} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] ${b} ${spdKmS}km/s${bearing} fuel:${fuel}`;
             });
             ctx += `Ships: ${shipStates.join('; ')}. `;
             
@@ -5144,8 +5179,8 @@
             const astData = asteroids.map(a => {
                 const p = a.position;
                 const sizeKm = Math.round((a.scale.x + a.scale.y + a.scale.z) / 3 * KM_PER_UNIT);
-                const label = a.userData.name || ('asteroid@[' + Math.round(p.x)+','+Math.round(p.y)+','+Math.round(p.z)+']');
-                return `${label} [${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}] ~${sizeKm}km ${fmtMass(a.userData.mass)}`;
+                const label = a.userData.name || ('asteroid@[' + Math.round(p.x * KM_PER_UNIT)+','+Math.round(p.y * KM_PER_UNIT)+','+Math.round(p.z * KM_PER_UNIT)+']');
+                return `${label} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] ~${sizeKm}km ${fmtMass(a.userData.mass)}`;
             });
             ctx += `Asteroids (${asteroids.length}): ${astData.join('; ')}`;
             
@@ -5185,7 +5220,7 @@
             
             // Check if it's a direct DSL command (starts with a known command)
             const firstWord = text.split(/\s+/)[0].toUpperCase();
-            const DSL_COMMANDS = ['MOVE', 'STOP', 'ORBIT', 'PATROL', 'FOLLOW', 'ATTACK'];
+            const DSL_COMMANDS = ['MOVE', 'STOP', 'ORBIT', 'PATROL', 'FOLLOW', 'ATTACK', 'CURSOR'];
             
             if (DSL_COMMANDS.includes(firstWord)) {
                 // Direct DSL input
