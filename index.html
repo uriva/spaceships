@@ -576,11 +576,6 @@
     
     <div class="status-display">
         <div class="status-value" id="mode-display">TACTICAL</div>
-        <div style="margin-top: 10px; font-family: 'Orbitron', sans-serif; font-size: 9px; color: #888; letter-spacing: 1px;">
-            <label for="gravity-slider">GRAVITY ×<span id="gravity-label">1e9</span></label>
-            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="4"
-                style="width: 120px; display: block; margin-top: 4px; accent-color: #00ffff;">
-        </div>
     </div>
 
     <div class="ship-hud">
@@ -594,6 +589,14 @@
     
     <div class="instructions">
         <h3>Command Interface</h3>
+        <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
+            <label for="gravity-slider" style="display: flex; justify-content: space-between;">
+                <span>GRAVITY MULTIPLIER</span>
+                <span id="gravity-label" style="color: #00ffff; font-weight: bold;">1e9</span>
+            </label>
+            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="4"
+                style="width: 100%; display: block; margin-top: 8px; accent-color: #00ffff; cursor: pointer;">
+        </div>
         <p><span class="key">WASDZX</span> orbit camera</p>
         <p><span class="key">ALT</span> strafe fly</p>
         <p><span class="key">SHIFT</span> move crosshair</p>
