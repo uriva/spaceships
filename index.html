@@ -789,7 +789,8 @@
             // 3D cursor beams — two red lines from engagement sphere edges
             const adaptiveBlend = {
                 transparent: true,
-                opacity: 0.85,
+                opacity: 0.5,
+                premultipliedAlpha: true,
                 fog: false,
                 blending: THREE.CustomBlending,
                 blendEquation: THREE.AddEquation,
@@ -2119,7 +2120,8 @@
             const mat = new THREE.LineBasicMaterial({ 
                 color: 0x66ffff, 
                 transparent: true, 
-                opacity: 0.85, 
+                opacity: 0.5, 
+                premultipliedAlpha: true,
                 fog: false,
                 blending: THREE.CustomBlending,
                 blendEquation: THREE.AddEquation,
