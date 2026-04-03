@@ -4593,7 +4593,7 @@
                             let nearestEnemy = null;
                             let minDist = Infinity;
                             spaceships.forEach(s => {
-                                if (s.userData.team === 'Omega') {
+                                if (s.userData.team === 'enemy') {
                                     const d = s.position.distanceTo(pos);
                                     if (d < minDist) {
                                         minDist = d;
@@ -4612,7 +4612,7 @@
                                 let nearestEnemy = null;
                                 let minDist = Infinity;
                                 spaceships.forEach(s => {
-                                    if (s.userData.team === 'Omega') {
+                                    if (s.userData.team === 'enemy') {
                                         const d = s.position.distanceTo(ref);
                                         if (d < minDist) {
                                             minDist = d;
