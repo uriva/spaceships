@@ -3115,6 +3115,14 @@
                 const isSelected = index === selectedShipIndex;
                 const hasFuel = data.fuel > 0;
                 
+                // Slowly regenerate weapons
+                if (data.weapons < data.maxWeapons) {
+                    data.weapons = Math.min(data.maxWeapons, data.weapons + 0.1);
+                    if (data.weapons > 8 && data.weaponsDepleted) {
+                        data.weaponsDepleted = false; // Recovered enough to shoot
+                    }
+                }
+                
                 // Get current velocity magnitude
                 const speed = data.velocity.length();
                 const targetSpeed = data.targetVelocity.length();
@@ -4559,10 +4567,34 @@
                     const shipsSpec = tokens.slice(1, targetIdx).join(' ');
                     const targetSpec = tokens.slice(targetIdx + 1).join(' ');
                     const ships = findShips(shipsSpec);
-                    const pos = parsePosition(targetSpec);
+                    
                     if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
-                    if (!pos) return { error: `Invalid target: "${targetSpec}"` };
-                    return { cmd: 'ATTACK', ships, target: pos };
+
+                    let targetObj = findShip(targetSpec);
+
+                    if (!targetObj) {
+                        const pos = parsePosition(targetSpec);
+                        if (pos) {
+                            let nearestEnemy = null;
+                            let minDist = Infinity;
+                            spaceships.forEach(s => {
+                                if (s.userData.team === 'Omega') {
+                                    const d = s.position.distanceTo(pos);
+                                    if (d < minDist) {
+                                        minDist = d;
+                                        nearestEnemy = s;
+                                    }
+                                }
+                            });
+                            if (nearestEnemy) {
+                                targetObj = nearestEnemy;
+                            }
+                        }
+                    }
+
+                    if (!targetObj) return { error: `Invalid or missing attack target: "${targetSpec}"` };
+                    
+                    return { cmd: 'ATTACK', ships, target: targetObj };
                 }
                 default:
                     return { error: `Unknown command: ${cmd}` };
@@ -4635,7 +4667,7 @@
                     case 'ATTACK':
                         data.behavior = {
                             type: 'attack',
-                            target: parsed.target.clone()
+                            target: parsed.target
                         };
                         break;
                 }
@@ -4989,35 +5021,35 @@
                         break;
                     }
                     case 'attack': {
-                        const dir = b.target.clone().sub(ship.position);
-                        const dist = dir.length();
-                        if (dist > 30 + brakeDist) {
-                            // Close in on target
-                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                        if (!b.target || !b.target.parent) {
+                            data.behavior = null; // target destroyed
+                            break;
+                        }
+                        
+                        const toTarget = b.target.position.clone().sub(ship.position);
+                        const dist = toTarget.length();
+                        
+                        // Move to intercept (stay at ~50 units distance, which is ~5km)
+                        if (dist > 50) {
+                            data.targetVelocity.copy(toTarget.normalize().multiplyScalar(BEHAVIOR_SPEED));
                             data.isAccelerating = true;
-                        } else if (dist > 30) {
-                            // Approaching firing range — brake
-                            data.isBraking = true;
+                        } else if (dist < 30) {
+                            // Too close, back away
+                            data.targetVelocity.copy(toTarget.normalize().negate().multiplyScalar(BEHAVIOR_SPEED * 0.5));
+                            data.isAccelerating = true;
                         } else {
-                            // In range — brake and fire
-                            if (speed > 0.02) data.isBraking = true;
-                            if (!b.lastFired || Date.now() - b.lastFired > 2000) {
-                                if (data.weapons > 0) {
-                                    let nearest = null, nearestDist = Infinity;
-                                    asteroids.forEach(a => {
-                                        const d = a.position.distanceTo(b.target);
-                                        if (d < nearestDist) { nearestDist = d; nearest = a; }
-                                    });
-                                    if (nearest && nearestDist < 50) {
-                                        fireLaser(nearest);
-                                        data.weapons--;
-                                        if (data.weapons <= 0 && !data.weaponsDepleted) {
-                                            data.weaponsDepleted = true;
-                                            showToast(`${data.name} — WEAPONS DEPLETED`, 'danger');
-                                        }
-                                    }
-                                    b.lastFired = Date.now();
-                                }
+                            data.isBraking = true; // Stay in range
+                        }
+                        
+                        // Fire logic - must be within 80 units (8km) to fire
+                        if (dist < 80 && (!b.lastFired || Date.now() - b.lastFired > 1000)) { // Fire every 1s
+                            if (data.weapons >= 8) {
+                                // Face target
+                                ship.lookAt(b.target.position);
+                                
+                                // Actually fire
+                                fireLaser(ship, b.target);
+                                b.lastFired = Date.now();
                             }
                         }
                         break;
