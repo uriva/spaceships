@@ -1238,30 +1238,31 @@
             `;
 
             // Star type palettes  [core, mid, edge, light hex]
+            // Reduced brightness by ~30% so they aren't blindingly white
             const starPalettes = [
                 { // Red dwarf / M-type
-                    core: new THREE.Color(1.0, 0.95, 0.8),
-                    mid:  new THREE.Color(1.0, 0.55, 0.25),
-                    edge: new THREE.Color(0.8, 0.2, 0.05),
-                    light: 0xff6644
+                    core: new THREE.Color(0.8, 0.7, 0.5),
+                    mid:  new THREE.Color(0.7, 0.35, 0.15),
+                    edge: new THREE.Color(0.5, 0.1, 0.02),
+                    light: 0xaa4422
                 },
                 { // Orange / K-type
-                    core: new THREE.Color(1.0, 0.97, 0.85),
-                    mid:  new THREE.Color(1.0, 0.72, 0.35),
-                    edge: new THREE.Color(0.9, 0.45, 0.15),
-                    light: 0xffaa55
+                    core: new THREE.Color(0.8, 0.75, 0.6),
+                    mid:  new THREE.Color(0.7, 0.45, 0.2),
+                    edge: new THREE.Color(0.6, 0.25, 0.08),
+                    light: 0xaa7733
                 },
                 { // Yellow / G-type (Sol-like)
-                    core: new THREE.Color(1.0, 1.0, 0.95),
-                    mid:  new THREE.Color(1.0, 0.92, 0.6),
-                    edge: new THREE.Color(0.95, 0.7, 0.3),
-                    light: 0xffeeaa
+                    core: new THREE.Color(0.8, 0.8, 0.75),
+                    mid:  new THREE.Color(0.7, 0.65, 0.4),
+                    edge: new THREE.Color(0.65, 0.45, 0.15),
+                    light: 0xaa9966
                 },
                 { // Blue-white / B-type
-                    core: new THREE.Color(0.9, 0.95, 1.0),
-                    mid:  new THREE.Color(0.6, 0.8, 1.0),
-                    edge: new THREE.Color(0.3, 0.5, 0.9),
-                    light: 0xaaddff
+                    core: new THREE.Color(0.6, 0.7, 0.8),
+                    mid:  new THREE.Color(0.4, 0.55, 0.7),
+                    edge: new THREE.Color(0.2, 0.35, 0.6),
+                    light: 0x6688aa
                 }
             ];
 
@@ -1303,8 +1304,8 @@
                 const edgeCSS = `rgb(${Math.round(palette.edge.r*255)},${Math.round(palette.edge.g*255)},${Math.round(palette.edge.b*255)})`;
                 const gradient = glowCtx.createRadialGradient(cx, cy, 0, cx, cy, 256);
                 // Intensely bright core (covers the physical sphere area)
-                gradient.addColorStop(0,    `rgba(255,255,255,1)`);
-                gradient.addColorStop(0.06, `rgba(255,255,250,0.95)`);
+                gradient.addColorStop(0,    `rgba(200,200,200,1)`);
+                gradient.addColorStop(0.06, `rgba(180,180,180,0.95)`);
                 gradient.addColorStop(0.10, coreCSS.replace('rgb', 'rgba').replace(')', ',0.85)'));
                 // Transition to star's characteristic mid color
                 gradient.addColorStop(0.18, midCSS.replace('rgb', 'rgba').replace(')', ',0.55)'));
