@@ -2104,7 +2104,8 @@
         function createBoundarySphere() {
             const R = 5000;
             const segments = 64;
-            const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.5 });
+            // Much brighter blue and less transparent to stand out against bright suns
+            const mat = new THREE.LineBasicMaterial({ color: 0x66ffff, transparent: true, opacity: 0.85, fog: false });
             const group = new THREE.Group();
             group.name = 'boundarySphere';
             
