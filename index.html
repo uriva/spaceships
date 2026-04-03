@@ -739,7 +739,7 @@
                 60,
                 window.innerWidth / window.innerHeight,
                 0.1,
-                10000
+                100000
             );
             updateCameraPosition();
             
@@ -966,7 +966,8 @@
                 transparent: true,
                 opacity: 0.9,
                 blending: THREE.AdditiveBlending,
-                sizeAttenuation: false
+                sizeAttenuation: false,
+                fog: false
             });
             
             const starField1 = new THREE.Points(geometry1, material1);
@@ -1011,7 +1012,8 @@
                 transparent: true,
                 opacity: 0.6,
                 blending: THREE.AdditiveBlending,
-                sizeAttenuation: false
+                sizeAttenuation: false,
+                fog: false
             });
             
             const starField2 = new THREE.Points(geometry2, material2);
@@ -1055,7 +1057,8 @@
                 transparent: true,
                 opacity: 0.15,
                 blending: THREE.AdditiveBlending,
-                sizeAttenuation: false
+                sizeAttenuation: false,
+                fog: false
             });
             
             const nebula = new THREE.Points(nebulaGeometry, nebulaMaterial);
@@ -1268,7 +1271,8 @@
                     },
                     vertexShader: starVertexShader,
                     fragmentShader: starFragmentShader,
-                    transparent: false
+                    transparent: false,
+                    fog: false
                 });
                 const sun = new THREE.Mesh(sunGeometry, sunMaterial);
                 sun.position.copy(sunPos);
@@ -1307,7 +1311,8 @@
                     transparent: true,
                     blending: THREE.AdditiveBlending,
                     depthWrite: false,
-                    opacity: 1.0
+                    opacity: 1.0,
+                    fog: false
                 });
                 const sprite = new THREE.Sprite(spriteMat);
                 // Sprite should be large: the physical sphere sits in the bright core area
@@ -1427,7 +1432,8 @@
                     roughness: 0.6 + Math.random() * 0.3,  // Varied roughness
                     metalness: 0.05 + Math.random() * 0.15,  // Slight metalness variation
                     emissive: 0x000000,
-                    emissiveIntensity: 0
+                    emissiveIntensity: 0,
+                    fog: false
                 });
                 
                 const planet = new THREE.Mesh(planetGeometry, planetMaterial);
@@ -1440,7 +1446,8 @@
                     color: variedAtmo,
                     transparent: true,
                     opacity: 0.2 + Math.random() * 0.15,
-                    blending: THREE.AdditiveBlending
+                    blending: THREE.AdditiveBlending,
+                    fog: false
                 });
                 const atmosphere = new THREE.Mesh(atmoGeometry, atmoMaterial);
                 planet.add(atmosphere);
@@ -1456,7 +1463,8 @@
                             color: bandColor,
                             transparent: true,
                             opacity: 0.3,
-                            blending: THREE.AdditiveBlending
+                            blending: THREE.AdditiveBlending,
+                            fog: false
                         });
                         const band = new THREE.Mesh(bandGeometry, bandMaterial);
                         band.rotation.x = Math.PI / 2;
