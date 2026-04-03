@@ -721,6 +721,45 @@
         const particleMaterialCache = {};  // keyed by color hex
         let lasers = [];
         
+        let dustParticles = [];
+        const dustPool = [];
+        const dustGeo = new THREE.SphereGeometry(0.8, 6, 6);
+        const dustMaterial = new THREE.MeshBasicMaterial({ color: 0xa89f91, transparent: true, opacity: 0.8, depthWrite: false });
+
+        function spawnDust(position, normal, force) {
+            const count = Math.min(100, Math.max(10, Math.floor(Math.abs(force) * 500)));
+            for (let i = 0; i < count; i++) {
+                let p;
+                if (dustPool.length > 0) {
+                    p = dustPool.pop();
+                    p.visible = true;
+                } else {
+                    p = new THREE.Mesh(dustGeo, dustMaterial.clone());
+                    scene.add(p);
+                }
+                
+                // Scatter position slightly
+                p.position.copy(position).add(
+                    new THREE.Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5)
+                );
+                
+                // Random velocity biased by normal
+                const outward = normal.clone().multiplyScalar(Math.random() * Math.abs(force) * 2.5);
+                const randomVel = new THREE.Vector3(
+                    (Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)
+                ).normalize().multiplyScalar(Math.random() * Math.abs(force) * 1.5);
+                
+                p.userData = {
+                    velocity: outward.add(randomVel),
+                    life: 1.0 + Math.random() * 1.5
+                };
+                p.userData.maxLife = p.userData.life;
+                p.material.opacity = 0.8;
+                p.scale.setScalar(Math.random() * 1.5 + 0.5);
+                dustParticles.push(p);
+            }
+        }
+        
         function init() {
             // Wire up gravity slider (log scale: slider value = log10(multiplier) * 2)
             const gravSlider = document.getElementById('gravity-slider');
@@ -1558,15 +1597,25 @@
         }
         
         function createSpaceships() {
-            const shipCount = 15;
+            createFleet('player', 0x44aaff, 'Alpha', new THREE.Vector3(0, 0, 50));
+            createFleet('enemy', 0xff4444, 'Omega', new THREE.Vector3(0, 0, -50));
+            
+            // Select first player ship by default
+            const firstPlayerShip = spaceships.findIndex(s => s.userData.team === 'player');
+            if (firstPlayerShip >= 0) {
+                selectShip(firstPlayerShip);
+            }
+        }
+        
+        function createFleet(team, color, prefix, offset) {
+            const shipCount = 10;
             
             // 3D spherical shell formation
             let shipIndex = 0;
             
             const shells = [
                 { radius: 0, count: 1 },
-                { radius: 15, count: 6 },
-                { radius: 30, count: 8 }
+                { radius: 15, count: 9 }
             ];
             
             for (const shell of shells) {
@@ -1588,20 +1637,21 @@
                         z = shell.radius * Math.sin(phi) * Math.sin(theta);
                     }
                     
-                    // Jitter
-                    x += (Math.random() - 0.5) * 2;
-                    y += (Math.random() - 0.5) * 2;
-                    z += (Math.random() - 0.5) * 2;
+                    // Jitter and offset
+                    x += (Math.random() - 0.5) * 2 + offset.x;
+                    y += (Math.random() - 0.5) * 2 + offset.y;
+                    z += (Math.random() - 0.5) * 2 + offset.z;
                     
                     const config = {
                         x: x,
                         z: z,
                         y: y,
-                        color: 0x44aaff,
-                        name: `Ship-${String(shipIndex + 1).padStart(2, '0')}`
+                        color: color,
+                        team: team,
+                        name: `${prefix}-${String(shipIndex + 1).padStart(2, '0')}`
                     };
                     
-                    const ship = createSingleSpaceship(config, shipIndex);
+                    const ship = createSingleSpaceship(config, spaceships.length);
                     ship.position.set(config.x, config.y, config.z);
                     
                     // Register position to prevent asteroid overlap
@@ -1609,7 +1659,7 @@
                     
                     // Face outward from center
                     if (shell.radius > 0) {
-                        ship.lookAt(0, 0, 0);
+                        ship.lookAt(offset.x, offset.y, offset.z);
                     }
                     
                     spaceships.push(ship);
@@ -1652,11 +1702,6 @@
                     
                     shipIndex++;
                 }
-            }
-            
-            // Select first ship by default
-            if (spaceships.length > 0) {
-                selectShip(0);
             }
         }
         
@@ -2561,6 +2606,9 @@
         }
         
         function addToSelection(obj) {
+            // Cannot select enemy ships
+            if (obj.userData.type === 'spaceship' && obj.userData.team === 'enemy') return;
+            
             if (selectedObjects.includes(obj)) return;
             selectedObjects.push(obj);
             
@@ -3524,6 +3572,21 @@
                 asteroid.position.add(asteroid.userData.velocity);
             });
             
+            // Update dust particles
+            for (let i = dustParticles.length - 1; i >= 0; i--) {
+                const p = dustParticles[i];
+                p.position.add(p.userData.velocity);
+                p.userData.life -= 0.02;
+                p.material.opacity = (p.userData.life / p.userData.maxLife) * 0.8;
+                p.scale.multiplyScalar(1.01); // expand slightly
+                
+                if (p.userData.life <= 0) {
+                    p.visible = false;
+                    dustPool.push(p);
+                    dustParticles.splice(i, 1);
+                }
+            }
+            
             // Elastic collisions between asteroids
             for (let i = 0; i < asteroids.length; i++) {
                 for (let j = i + 1; j < asteroids.length; j++) {
@@ -3565,6 +3628,10 @@
                             const impulse = vDotN * 0.7;
                             a.userData.velocity.sub(normal.clone().multiplyScalar(impulse * b.userData.mass / totalMass * 2));
                             b.userData.velocity.add(normal.clone().multiplyScalar(impulse * a.userData.mass / totalMass * 2));
+                            
+                            // Spawn dust animation at collision point
+                            const collisionPoint = a.position.clone().lerp(b.position, radA / (radA + radB));
+                            spawnDust(collisionPoint, normal, vDotN);
                             
                             // Separate so they don't overlap, proportional to their mass inverse
                             const massRatioA = b.userData.mass / totalMass;
