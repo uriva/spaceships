@@ -916,6 +916,8 @@
         }
         
         function createStarField() {
+            const starFieldGroup = new THREE.Group();
+            
             // Layer 1: Dense white/cyan stars
             const geometry1 = new THREE.BufferGeometry();
             const count1 = 5000;
@@ -968,7 +970,7 @@
             });
             
             const starField1 = new THREE.Points(geometry1, material1);
-            scene.add(starField1);
+            starFieldGroup.add(starField1);
             
             // Layer 2: Distant red/gold stars
             const geometry2 = new THREE.BufferGeometry();
@@ -1013,7 +1015,7 @@
             });
             
             const starField2 = new THREE.Points(geometry2, material2);
-            scene.add(starField2);
+            starFieldGroup.add(starField2);
             
             // Nebula - colored fog patches
             const nebulaGeometry = new THREE.BufferGeometry();
@@ -1057,7 +1059,7 @@
             });
             
             const nebula = new THREE.Points(nebulaGeometry, nebulaMaterial);
-            scene.add(nebula);
+            starFieldGroup.add(nebula);
             
             // Store celestial bodies for animation
             const celestialBodies = [];
@@ -1324,7 +1326,7 @@
                     sprite: sprite
                 };
 
-                scene.add(sun);
+                starFieldGroup.add(sun);
                 celestialBodies.push(sun);
             }
             
@@ -1469,12 +1471,15 @@
                     planetType: planetType.name
                 };
                 
-                scene.add(planet);
+                starFieldGroup.add(planet);
                 celestialBodies.push(planet);
             }
             
             // Store for animation
+            scene.add(starFieldGroup);
+            
             starField = {
+                group: starFieldGroup,
                 field1: starField1,
                 field2: starField2,
                 nebula: nebula,
@@ -3555,11 +3560,6 @@
             // Check all objects - if camera is inside, switch to wireframe
             const allObjects = [...asteroids];
             
-            // Also check celestial bodies (suns and planets)
-            if (starField && starField.celestialBodies) {
-                allObjects.push(...starField.celestialBodies);
-            }
-            
             allObjects.forEach(obj => {
                 if (!obj.geometry) return;
                 
@@ -3759,6 +3759,10 @@
         
         function animate() {
             requestAnimationFrame(animate);
+            
+            if (starField && starField.group) {
+                starField.group.position.copy(cameraPosition);
+            }
             
             applyCameraTransition();
             updateKeyboardControls();
