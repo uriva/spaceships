@@ -1250,7 +1250,7 @@
 
             const numSuns = 1 + Math.floor(Math.random() * 2);
             for (let i = 0; i < numSuns; i++) {
-                const sunSize = 40 + Math.random() * 60;
+                const sunSize = 200 + Math.random() * 300;
                 const palette = starPalettes[Math.floor(Math.random() * starPalettes.length)];
                 const sunPos = generateSpacedPosition(8000, 15000, 3000);
 
@@ -2012,10 +2012,10 @@
                 asteroid.position.copy(asteroidPos);
                 
                 // Power-law scale distribution: many small, few large, rare giants
-                // Produces values from 15 to ~800, with most in 20-60 range
-                // u=0→max size, u=1→min size; exponent 3 gives heavy small-end weighting
+                // u uniform [0,1], inverted power law gives heavy small-end weighting
+                // Most asteroids 15-60, rare ones up to 800
                 const u = Math.random();
-                let scale = 15 / Math.pow(u + 0.02, 1/3);
+                let scale = 15 / Math.pow(u + 6.6e-6, 1/3);
                 scale = Math.max(15, Math.min(800, scale));
                 
                 // Apply non-uniform scaling based on shape type
