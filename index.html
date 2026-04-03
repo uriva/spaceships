@@ -3151,19 +3151,23 @@
                     const fuelT = Math.round(obj.userData.fuel);
                     const wpnPct = Math.round(obj.userData.weapons / obj.userData.maxWeapons * 100);
                     const speed = Math.round(obj.userData.velocity.length() * KM_PER_UNIT * 60);  // km/s (assuming 60fps)
-                    display.innerHTML = `${obj.userData.name} <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
+                    const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
+                    const sizeM = Math.round(avgScale * KM_PER_UNIT * 1000);
+                    display.innerHTML = `${obj.userData.name} <span style="color:#888">${sizeM}m</span> <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
                 } else if (obj.userData.type === 'asteroid') {
                     const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
                                   obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
-                    const sizeKm = Math.round((obj.scale.x + obj.scale.y + obj.scale.z) / 3 * KM_PER_UNIT);
+                    const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
+                    const radiusKm = (avgScale * KM_PER_UNIT);
+                    const radiusStr = radiusKm >= 1 ? radiusKm.toFixed(1) + 'km' : Math.round(radiusKm * 1000) + 'm';
                     const mass = obj.userData.mass;
                     const massStr = mass >= 1e12 ? (mass / 1e12).toFixed(1) + 'Tt' :
                                    mass >= 1e9 ? (mass / 1e9).toFixed(1) + 'Gt' :
                                    mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' :
                                    mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
                     const massColor = obj.userData.mass >= 1e9 ? '#ff6600' : '#aaaaaa';
-                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | ~${sizeKm}km</span> <span style="color:${massColor}">MASS:${massStr}</span> <span style="color:#888">${dist}</span>`;
+                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | r=${radiusStr}</span> <span style="color:${massColor}">MASS:${massStr}</span> <span style="color:#888">${dist}</span>`;
                 }
             } else {
                 // Multiple objects selected - show avg distance
