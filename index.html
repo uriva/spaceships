@@ -4561,11 +4561,26 @@
                     return { error: `Target not found: "${targetSpec}"` };
                 }
                 case 'ATTACK': {
-                    // ATTACK <ships> TARGET <target>
-                    const targetIdx = tokens.findIndex(t => t.toUpperCase() === 'TARGET');
-                    if (targetIdx < 0) return { error: 'ATTACK requires TARGET keyword' };
-                    const shipsSpec = tokens.slice(1, targetIdx).join(' ');
-                    const targetSpec = tokens.slice(targetIdx + 1).join(' ');
+                    // ATTACK <ships> TARGET <target> or ATTACK <target> for selected ships
+                    let targetIdx = tokens.findIndex(t => t.toUpperCase() === 'TARGET');
+                    let shipsSpec = 'selected';
+                    let targetSpec = '';
+
+                    if (targetIdx < 0) {
+                        if (tokens.length === 2) {
+                            shipsSpec = 'selected';
+                            targetSpec = tokens[1];
+                        } else if (tokens.length >= 3) {
+                            shipsSpec = tokens.slice(1, -1).join(' ');
+                            targetSpec = tokens[tokens.length - 1];
+                        } else {
+                            return { error: 'ATTACK requires a target' };
+                        }
+                    } else {
+                        shipsSpec = tokens.slice(1, targetIdx).join(' ').trim() || 'selected';
+                        targetSpec = tokens.slice(targetIdx + 1).join(' ').trim();
+                    }
+
                     const ships = findShips(shipsSpec);
                     
                     if (ships.length === 0) return { error: `No ships found: "${shipsSpec}"` };
@@ -4588,6 +4603,26 @@
                             });
                             if (nearestEnemy) {
                                 targetObj = nearestEnemy;
+                            }
+                        } else {
+                            // If target is just "enemy" or "nearest_enemy"
+                            if (targetSpec.toLowerCase().includes('enemy')) {
+                                // Find nearest enemy to the selected ships
+                                const ref = ships.length > 0 ? ships[0].position : (selectedObjects.length > 0 ? selectedObjects[0].position : cameraPosition);
+                                let nearestEnemy = null;
+                                let minDist = Infinity;
+                                spaceships.forEach(s => {
+                                    if (s.userData.team === 'Omega') {
+                                        const d = s.position.distanceTo(ref);
+                                        if (d < minDist) {
+                                            minDist = d;
+                                            nearestEnemy = s;
+                                        }
+                                    }
+                                });
+                                if (nearestEnemy) {
+                                    targetObj = nearestEnemy;
+                                }
                             }
                         }
                     }
