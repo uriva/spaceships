@@ -678,6 +678,11 @@
         let cameraPosition = new THREE.Vector3(400, 300, 400);
         let cameraTarget = new THREE.Vector3(0, 0, 0);
         let cameraUpVector = new THREE.Vector3(0, 1, 0);  // Track up vector separately
+        // Camera sphere system — same pole-free approach as cursor
+        let camOrbitCenter = new THREE.Vector3(0, 0, 0);                 // orbit around this point (updated by strafe/look)
+        let camSphereDir = new THREE.Vector3(1, 0.6, 1).normalize();   // direction from orbit center
+        let camSphereUp = new THREE.Vector3(0, 1, 0);                   // local up for camera sphere
+        let camSphereRadius = new THREE.Vector3(400, 300, 400).length(); // distance from orbit center
         let targetCameraPosition = new THREE.Vector3(40, 30, 40);
         let targetCameraTarget = new THREE.Vector3(0, 0, 0);
         let isCameraTransitioning = false;
@@ -689,15 +694,16 @@
         
         
         // Keyboard controls
-        let keys = { w: false, a: false, s: false, d: false, space: false, shift: false, z: false, x: false };
-        const CAMERA_MOVE_SPEED_MIN = 4.0;
-        const CAMERA_MOVE_SPEED_MAX = 40.0;
-        const CAMERA_ACCEL_FRAMES = 90;  // frames to reach max speed
+        let keys = { w: false, a: false, s: false, d: false, space: false, shift: false, alt: false, z: false, x: false };
+        const CAMERA_MOVE_SPEED_MIN = 0.2;
+        const CAMERA_MOVE_SPEED_MAX = 10.0;
+        const CAMERA_ACCEL_FRAMES = 45;  // frames to reach max speed
         let cameraMoveHeldFrames = 0;
         const WORLD_BOUNDARY = 5000;
         
         // Double-tap tracking for L key
         let lastLPressTime = 0;
+        let lastCPressTime = 0;
         const DOUBLE_TAP_THRESHOLD = 400; // milliseconds
         
         // Animation
@@ -726,7 +732,7 @@
             
             // Scene setup
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x050508, 0.0005);
+            scene.fog = new THREE.FogExp2(0x050508, 0.0002);
             
             // Camera
             camera = new THREE.PerspectiveCamera(
@@ -821,7 +827,7 @@
                 new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1)
             ]);
             const surfBeamMat = new THREE.LineBasicMaterial({
-                color: 0xff8855, transparent: true, opacity: 0.35
+                color: 0xffcc88, transparent: true, opacity: 1.0
             });
             cursorSurfaceBeam = new THREE.Line(surfBeamGeo, surfBeamMat);
             cursorSurfaceBeam.frustumCulled = false;
@@ -919,7 +925,7 @@
             
             for (let i = 0; i < count1; i++) {
                 const i3 = i * 3;
-                const radius = 2000 + Math.random() * 3000;
+                const radius = 6000 + Math.random() * 4000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -972,7 +978,7 @@
             
             for (let i = 0; i < count2; i++) {
                 const i3 = i * 3;
-                const radius = 3000 + Math.random() * 2000;
+                const radius = 7000 + Math.random() * 3000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -1017,7 +1023,7 @@
             
             for (let i = 0; i < nebulaCount; i++) {
                 const i3 = i * 3;
-                const radius = 1500 + Math.random() * 2500;
+                const radius = 6000 + Math.random() * 4000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -2016,7 +2022,10 @@
                 let distance, theta, phi;
                 
                 do {
-                    distance = 300 + Math.random() * 4000;
+                    // Uniform distribution inside sphere — even spread, not clustered in center
+                    // Use cube-root of uniform [0,1] to get uniform volume distribution
+                    distance = Math.cbrt(Math.random()) * WORLD_RADIUS * 0.9;
+                    distance = Math.max(200, distance); // not too close to origin
                     theta = Math.random() * Math.PI * 2;
                     phi = Math.acos(2 * Math.random() - 1);
                     
@@ -2026,15 +2035,15 @@
                         distance * Math.sin(phi) * Math.sin(theta)
                     );
                     attempts++;
-                } while (!isPositionFree(asteroidPos, 15) && attempts < maxAttempts);
+                } while (!isPositionFree(asteroidPos, 60) && attempts < maxAttempts);
                 
                 asteroid.position.copy(asteroidPos);
                 
-                // Gaussian distribution for scale (mean = 2.8, stdDev = 0.8)
-                // This makes most asteroids bigger (2-4 range) with some smaller outliers
-                let scale = gaussianRandom(8, 3);
+                // Gaussian distribution for scale (mean = 40, stdDev = 15)
+                // ~5x bigger than before, most asteroids in 25-55 range
+                let scale = gaussianRandom(40, 15);
                 // Clamp to reasonable bounds
-                scale = Math.max(3, Math.min(20, scale));
+                scale = Math.max(15, Math.min(100, scale));
                 
                 // Apply non-uniform scaling based on shape type
                 if (shapeType < 0.15) {
@@ -2171,7 +2180,7 @@
         function createBoundarySphere() {
             const R = 5000;
             const segments = 64;
-            const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15 });
+            const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.5 });
             const group = new THREE.Group();
             group.name = 'boundarySphere';
             
@@ -2226,7 +2235,8 @@
             const el = document.getElementById('mode-label');
             if (keys.shift) { el.textContent = 'Marking Target'; el.style.color = '#ff6644'; }
             else if (keys.space) { el.textContent = 'Looking Around'; el.style.color = '#44aaff'; }
-            else { el.textContent = 'Strafe'; el.style.color = '#00ffcc'; }
+            else if (keys.alt) { el.textContent = 'Strafe'; el.style.color = '#00ffcc'; }
+            else { el.textContent = 'Orbit'; el.style.color = '#aaddff'; }
         }
         
         function onKeyDown(event) {
@@ -2242,6 +2252,7 @@
                 keys.space = true;
             }
             if (event.shiftKey) keys.shift = true;
+            if (event.altKey) { keys.alt = true; event.preventDefault(); }
             updateModeLabel();
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = true;
@@ -2287,6 +2298,21 @@
                 lastLPressTime = now;
             }
             
+            // C key to focus camera on crosshair
+            // Double-tap C to zoom in close to crosshair
+            if (key === 'c' || event.key === 'C' || code === 'KeyC') {
+                const now = Date.now();
+                const timeSinceLastPress = now - lastCPressTime;
+                
+                if (timeSinceLastPress < DOUBLE_TAP_THRESHOLD) {
+                    focusOnCrosshair(true);
+                } else {
+                    focusOnCrosshair(false);
+                }
+                
+                lastCPressTime = now;
+            }
+            
             if (key === 'z' || code === 'KeyZ') keys.z = true;
             if (key === 'x' || code === 'KeyX') keys.x = true;
             
@@ -2303,7 +2329,7 @@
         }
         
         function cycleSelection(direction = 1) {
-            const allObjects = [...spaceships, ...asteroids];
+            const allObjects = [...spaceships];
             if (allObjects.length === 0) return;
             
             // Sort by distance to camera (recalculated each time)
@@ -2335,6 +2361,7 @@
                 keys.space = false;
             }
             if (!event.shiftKey) keys.shift = false;
+            if (!event.altKey) keys.alt = false;
             updateModeLabel();
             
             if (key === 'w' || code === 'KeyW' || key === 'arrowup') keys.w = false;
@@ -2344,6 +2371,17 @@
             if (key === 'z' || code === 'KeyZ') keys.z = false;
             if (key === 'x' || code === 'KeyX') keys.x = false;
         }
+        
+        // Clear all stuck keys when window loses focus
+        function clearAllKeys() {
+            keys.w = false; keys.a = false; keys.s = false; keys.d = false;
+            keys.z = false; keys.x = false;
+            keys.space = false; keys.shift = false; keys.alt = false;
+            cameraMoveHeldFrames = 0;
+            updateModeLabel();
+        }
+        window.addEventListener('blur', clearAllKeys);
+        document.addEventListener('visibilitychange', () => { if (document.hidden) clearAllKeys(); });
         
         function onMouseDown(event) {
             // Only handle left mouse button (0)
@@ -2644,6 +2682,23 @@
             addToSelection(asteroid);
         }
         
+        function focusOnCrosshair(zoomed = false) {
+            const crosshairPos = cursorDir.clone().multiplyScalar(cursorRadius);
+            
+            if (zoomed) {
+                // Double-tap: zoom in close to crosshair (8 units away)
+                const dirToCrosshair = new THREE.Vector3().subVectors(cameraPosition, crosshairPos).normalize();
+                targetCameraPosition.copy(crosshairPos).add(dirToCrosshair.multiplyScalar(8));
+                targetCameraTarget.copy(crosshairPos);
+            } else {
+                // Single tap: just look at crosshair, keep position
+                targetCameraPosition.copy(cameraPosition);
+                targetCameraTarget.copy(crosshairPos);
+            }
+            
+            isCameraTransitioning = true;
+        }
+        
         function focusOnSelected(zoomed = false) {
             if (!selectedObject) return;
             
@@ -2680,6 +2735,11 @@
                 cameraTarget.copy(targetCameraTarget);
                 isCameraTransitioning = false;
             }
+            
+            // Keep orbit system in sync so orbit mode picks up from here
+            camOrbitCenter.copy(cameraTarget);
+            camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+            camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
             
             updateCameraPosition();
         }
@@ -3448,10 +3508,15 @@
                 // Keep cameraTarget at a fixed distance from camera
                 const dist = cameraPosition.distanceTo(cameraTarget) || 100;
                 cameraTarget.copy(cameraPosition).addScaledVector(lookDir, dist);
+                // Sync orbit system so orbit mode orbits around where we're now looking
+                camOrbitCenter.copy(cameraTarget);
+                camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+                camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
+                camSphereUp.copy(cameraUpVector);
                 updateCameraPosition();
                 
-            } else {
-                // Fly mode - W/S up/down, A/D left/right, Z/X forward/back
+            } else if (keys.alt) {
+                // Alt+keys: Strafe — linear fly in camera-relative directions
                 let cameraMove = new THREE.Vector3(0, 0, 0);
                 
                 const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
@@ -3473,6 +3538,52 @@
                     
                     cameraPosition.add(cameraMove);
                     cameraTarget.add(cameraMove);
+                    // Sync orbit system — orbit center is where we're looking
+                    camOrbitCenter.copy(cameraTarget);
+                    camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+                    camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
+                    camSphereUp.copy(cameraUpVector);
+                    updateCameraPosition();
+                } else {
+                    cameraMoveHeldFrames = 0;
+                }
+            } else {
+                // Default: Orbit mode — camera moves on sphere surface, same principle as cursor
+                // W/S = pitch (up/down on sphere), A/D = yaw (clockwise/counter), Z/X = radius
+                // Only applies when orbit keys are pressed — otherwise camera stays put
+                if (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x) {
+                    isCameraTransitioning = false;
+                    cameraMoveHeldFrames++;
+                    const angularSpeed = 0.015;
+                    const radialSpeed = 2;
+                    const t = Math.min(cameraMoveHeldFrames / 120, 1);
+                    const aSpeed = angularSpeed + t * angularSpeed * 3;  // ramp angular
+                    const rSpeed = radialSpeed + t * 38;    // ramp radial: 2 → 40
+                    
+                    // W/S: pitch — rotate camSphereDir and camSphereUp around local right axis
+                    if (keys.w || keys.s) {
+                        const right = new THREE.Vector3().crossVectors(camSphereDir, camSphereUp).normalize();
+                        const angle = keys.w ? aSpeed : -aSpeed;
+                        camSphereDir.applyAxisAngle(right, angle).normalize();
+                        camSphereUp.applyAxisAngle(right, angle).normalize();
+                    }
+                    
+                    // A/D: yaw — rotate camSphereDir around camSphereUp
+                    if (keys.a || keys.d) {
+                        const angle = keys.a ? aSpeed : -aSpeed;
+                        camSphereDir.applyAxisAngle(camSphereUp, angle).normalize();
+                    }
+                    
+                    // Z/X: radius
+                    if (keys.z) camSphereRadius -= rSpeed;
+                    if (keys.x) camSphereRadius += rSpeed;
+                    camSphereRadius = Math.max(1, camSphereRadius);  // don't go through origin
+                    
+                    // Update camera position from sphere coords, orbiting around camOrbitCenter
+                    cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                    // Camera looks toward orbit center
+                    cameraTarget.copy(camOrbitCenter);
+                    cameraUpVector.copy(camSphereUp);
                     updateCameraPosition();
                 } else {
                     cameraMoveHeldFrames = 0;
