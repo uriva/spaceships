@@ -787,9 +787,18 @@
             createBoundarySphere();
             
             // 3D cursor beams — two red lines from engagement sphere edges
-            const beamMatX = new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.35 });
-            const beamMatZ = new THREE.LineBasicMaterial({ color: 0x33ff33, transparent: true, opacity: 0.35 });
-            const beamMatY = new THREE.LineBasicMaterial({ color: 0x3388ff, transparent: true, opacity: 0.35 });
+            const adaptiveBlend = {
+                transparent: true,
+                opacity: 0.85,
+                fog: false,
+                blending: THREE.CustomBlending,
+                blendEquation: THREE.AddEquation,
+                blendSrc: THREE.OneMinusDstColorFactor,
+                blendDst: THREE.OneMinusSrcColorFactor
+            };
+            const beamMatX = new THREE.LineBasicMaterial({ color: 0xff3333, ...adaptiveBlend });
+            const beamMatZ = new THREE.LineBasicMaterial({ color: 0x33ff33, ...adaptiveBlend });
+            const beamMatY = new THREE.LineBasicMaterial({ color: 0x3388ff, ...adaptiveBlend });
             const beamGeoX = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(-WORLD_RADIUS, 0, 0), new THREE.Vector3(WORLD_RADIUS, 0, 0)
             ]);
@@ -830,7 +839,7 @@
                 new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1)
             ]);
             const surfBeamMat = new THREE.LineBasicMaterial({
-                color: 0xffcc88, transparent: true, opacity: 1.0
+                color: 0xffcc88, ...adaptiveBlend
             });
             cursorSurfaceBeam = new THREE.Line(surfBeamGeo, surfBeamMat);
             cursorSurfaceBeam.frustumCulled = false;
@@ -2105,7 +2114,17 @@
             const R = 5000;
             const segments = 64;
             // Much brighter blue and less transparent to stand out against bright suns
-            const mat = new THREE.LineBasicMaterial({ color: 0x66ffff, transparent: true, opacity: 0.85, fog: false });
+            // Using custom exclusion blending so they invert against bright backgrounds
+            const mat = new THREE.LineBasicMaterial({ 
+                color: 0x66ffff, 
+                transparent: true, 
+                opacity: 0.85, 
+                fog: false,
+                blending: THREE.CustomBlending,
+                blendEquation: THREE.AddEquation,
+                blendSrc: THREE.OneMinusDstColorFactor,
+                blendDst: THREE.OneMinusSrcColorFactor
+            });
             const group = new THREE.Group();
             group.name = 'boundarySphere';
             
