@@ -1601,8 +1601,8 @@
         }
         
         function createSpaceships() {
-            createFleet('player', 0x44aaff, 'Alpha', new THREE.Vector3(0, 0, 50));
-            createFleet('enemy', 0xff4444, 'Omega', new THREE.Vector3(0, 0, -50));
+            createFleet('player', 0x44aaff, 'Alpha', new THREE.Vector3(0, 0, 400));
+            createFleet('enemy', 0xff4444, 'Omega', new THREE.Vector3(0, 0, -400));
             
             // Select first player ship by default
             const firstPlayerShip = spaceships.findIndex(s => s.userData.team === 'player');
