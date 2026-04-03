@@ -190,13 +190,15 @@
             border-radius: 8px;
             backdrop-filter: blur(10px);
             font-family: 'Orbitron', sans-serif;
+            min-width: 250px;
         }
         
         .status-value {
             color: #fff;
-            font-size: 18px;
-            font-weight: 700;
-            letter-spacing: 2px;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 1px;
+            line-height: 1.6;
         }
         
         /* Ship Selector HUD */
@@ -596,10 +598,14 @@
         <p><span class="key">ALT</span> strafe fly</p>
         <p><span class="key">SHIFT</span> move crosshair</p>
         <p><span class="key">SPACE</span> look around</p>
+        <p><span class="key">P</span> cycle asteroids</p>
+        <p><span class="key">C</span> focus crosshair</p>
+        <p><span class="key">/</span> command input</p>
         <p id="mode-label" style="margin-top: 6px; font-size: 12px; color: #aaddff; text-transform: uppercase; letter-spacing: 1px;">Orbit</p>
     </div>
     
     <div id="selection-indicators"></div>
+    <div id="proximity-labels" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 30;"></div>
     
     <div class="selection-box" id="selection-box"></div>
     
@@ -734,14 +740,14 @@
             
             // Scene setup
             scene = new THREE.Scene();
-            // A bit more dense fog to give a sense of scale and depth
-            scene.fog = new THREE.FogExp2(0x0a0a14, 0.0003);
+            // Fog density lowered so asteroids don't fade too quickly
+            scene.fog = new THREE.FogExp2(0x0a0a14, 0.00008);
             
             // Camera
             camera = new THREE.PerspectiveCamera(
                 60,
                 window.innerWidth / window.innerHeight,
-                0.1,
+                1.0,
                 100000
             );
             updateCameraPosition();
@@ -749,7 +755,8 @@
             // Renderer
             renderer = new THREE.WebGLRenderer({ 
                 antialias: true,
-                alpha: true 
+                alpha: true,
+                logarithmicDepthBuffer: true
             });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -789,7 +796,7 @@
             // 3D cursor beams — two red lines from engagement sphere edges
             const adaptiveBlend = {
                 transparent: true,
-                opacity: 0.5,
+                opacity: 0.15,  // Subtler opacity for beams
                 premultipliedAlpha: true,
                 fog: false,
                 blending: THREE.CustomBlending,
@@ -797,9 +804,10 @@
                 blendSrc: THREE.OneMinusDstColorFactor,
                 blendDst: THREE.OneMinusSrcColorFactor
             };
-            const beamMatX = new THREE.LineBasicMaterial({ color: 0xff3333, ...adaptiveBlend });
-            const beamMatZ = new THREE.LineBasicMaterial({ color: 0x33ff33, ...adaptiveBlend });
-            const beamMatY = new THREE.LineBasicMaterial({ color: 0x3388ff, ...adaptiveBlend });
+            // Dimmed base colors so the exclusion blend isn't as aggressive against white backgrounds
+            const beamMatX = new THREE.LineBasicMaterial({ color: 0xaa2222, ...adaptiveBlend });
+            const beamMatZ = new THREE.LineBasicMaterial({ color: 0x22aa22, ...adaptiveBlend });
+            const beamMatY = new THREE.LineBasicMaterial({ color: 0x2255aa, ...adaptiveBlend });
             const beamGeoX = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(-WORLD_RADIUS, 0, 0), new THREE.Vector3(WORLD_RADIUS, 0, 0)
             ]);
@@ -933,7 +941,7 @@
             
             // Layer 1: Dense white/cyan stars
             const geometry1 = new THREE.BufferGeometry();
-            const count1 = 5000;
+            const count1 = 1500; // Significantly reduced star count
             const positions1 = new Float32Array(count1 * 3);
             const colors1 = new Float32Array(count1 * 3);
             const sizes1 = new Float32Array(count1);
@@ -951,19 +959,19 @@
                 const colorType = Math.random();
                 if (colorType > 0.85) {
                     // Blue-white stars
-                    colors1[i3] = 0.8;
-                    colors1[i3 + 1] = 0.9;
-                    colors1[i3 + 2] = 1;
+                    colors1[i3] = 0.5;
+                    colors1[i3 + 1] = 0.6;
+                    colors1[i3 + 2] = 0.7;
                 } else if (colorType > 0.6) {
                     // Cyan stars
-                    colors1[i3] = 0.6;
-                    colors1[i3 + 1] = 1;
-                    colors1[i3 + 2] = 1;
+                    colors1[i3] = 0.4;
+                    colors1[i3 + 1] = 0.7;
+                    colors1[i3 + 2] = 0.7;
                 } else {
                     // White stars
-                    colors1[i3] = 1;
-                    colors1[i3 + 1] = 1;
-                    colors1[i3 + 2] = 1;
+                    colors1[i3] = 0.6;
+                    colors1[i3 + 1] = 0.6;
+                    colors1[i3 + 2] = 0.6;
                 }
                 
                 sizes1[i] = 2 + Math.random() * 4;
@@ -988,7 +996,7 @@
             
             // Layer 2: Distant red/gold stars
             const geometry2 = new THREE.BufferGeometry();
-            const count2 = 2000;
+            const count2 = 600; // Significantly reduced red/gold stars
             const positions2 = new Float32Array(count2 * 3);
             const colors2 = new Float32Array(count2 * 3);
             
@@ -1005,14 +1013,14 @@
                 const colorType = Math.random();
                 if (colorType > 0.7) {
                     // Gold stars
-                    colors2[i3] = 1;
-                    colors2[i3 + 1] = 0.8;
-                    colors2[i3 + 2] = 0.4;
+                    colors2[i3] = 0.6;
+                    colors2[i3 + 1] = 0.48;
+                    colors2[i3 + 2] = 0.24;
                 } else {
                     // Reddish stars
-                    colors2[i3] = 1;
-                    colors2[i3 + 1] = 0.5;
-                    colors2[i3 + 2] = 0.3;
+                    colors2[i3] = 0.6;
+                    colors2[i3 + 1] = 0.3;
+                    colors2[i3 + 2] = 0.18;
                 }
             }
             
@@ -1023,7 +1031,7 @@
                 size: 1.5,
                 vertexColors: true,
                 transparent: true,
-                opacity: 0.6,
+                opacity: 0.4,
                 blending: THREE.AdditiveBlending,
                 sizeAttenuation: false,
                 fog: false
@@ -1425,28 +1433,26 @@
             ];
             
             for (let i = 0; i < numPlanets; i++) {
-                // Random planet size (15-40 units)
-                const planetSize = 15 + Math.random() * 25;
+                // Random planet size (increase size significantly: from 15-40 to 100-300)
+                const planetSize = 100 + Math.random() * 200;
                 
                 // Pick a planet type
                 const planetType = planetTypes[Math.floor(Math.random() * planetTypes.length)];
                 const baseColor = planetType.colors[Math.floor(Math.random() * planetType.colors.length)];
                 
-                // Position planet far outside boundary (2000-5000 units), ensure separation of 1000 units
-                const planetPos = generateSpacedPosition(6000, 12000, 2000);
+                // Position planet far outside boundary (5000-8000 units), ensure separation of 1000 units
+                // We bring them slightly closer so they are visible, but still far in the skybox
+                const planetPos = generateSpacedPosition(5000, 8000, 1000);
                 
-                const planetGeometry = new THREE.SphereGeometry(planetSize, 24, 24);
+                const planetGeometry = new THREE.SphereGeometry(planetSize, 32, 32);
                 
                 // Create varied color - not solid!
                 const variedColor = varyColor(baseColor, 0.2);
                 
-                // Planets use StandardMaterial - they don't glow, they reflect light
-                const planetMaterial = new THREE.MeshStandardMaterial({
+                // Planets use BasicMaterial or give them their own light so they are visible from far away without huge lights
+                // StandardMaterial at 6000+ units receives almost no light from the main scene directional light
+                const planetMaterial = new THREE.MeshBasicMaterial({
                     color: variedColor,
-                    roughness: 0.6 + Math.random() * 0.3,  // Varied roughness
-                    metalness: 0.05 + Math.random() * 0.15,  // Slight metalness variation
-                    emissive: 0x000000,
-                    emissiveIntensity: 0,
                     fog: false
                 });
                 
@@ -1455,11 +1461,11 @@
                 
                 // Create varied atmosphere color
                 const variedAtmo = varyColor(planetType.atmosphere, 0.1);
-                const atmoGeometry = new THREE.SphereGeometry(planetSize * 1.08, 24, 24);
+                const atmoGeometry = new THREE.SphereGeometry(planetSize * 1.08, 32, 32);
                 const atmoMaterial = new THREE.MeshBasicMaterial({
                     color: variedAtmo,
                     transparent: true,
-                    opacity: 0.2 + Math.random() * 0.15,
+                    opacity: 0.3 + Math.random() * 0.2,
                     blending: THREE.AdditiveBlending,
                     fog: false
                 });
@@ -1485,6 +1491,32 @@
                         band.rotation.y = Math.random() * Math.PI;
                         planet.add(band);
                     }
+                }
+
+                // Add proper planetary rings to some planets (25% chance)
+                if (Math.random() > 0.75) {
+                    const innerRadius = planetSize * (1.2 + Math.random() * 0.3);
+                    const outerRadius = innerRadius + planetSize * (0.5 + Math.random() * 1.5);
+                    const ringGeometry = new THREE.RingGeometry(innerRadius, outerRadius, 64);
+                    
+                    // Generate a nice dusty/icy color for the ring
+                    const ringColor = new THREE.Color(0xffffff).lerp(new THREE.Color(planetType.baseColor), 0.3);
+                    
+                    const ringMaterial = new THREE.MeshBasicMaterial({
+                        color: ringColor,
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 0.4 + Math.random() * 0.3,
+                        fog: false
+                    });
+                    
+                    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                    
+                    // Tilt the ring
+                    ring.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+                    ring.rotation.y = (Math.random() - 0.5) * 0.5;
+                    
+                    planet.add(ring);
                 }
                 
                 planet.userData = {
@@ -1589,13 +1621,13 @@
                     const trailColors = new Float32Array(TRAIL_LENGTH * 4); // RGBA
                     const trailGeometry = new THREE.BufferGeometry();
                     trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
-                    trailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 4));
+                    trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
                     const trailMaterial = new THREE.ShaderMaterial({
                         vertexShader: `
-                            attribute vec4 color;
+                            attribute vec4 customColor;
                             varying vec4 vColor;
                             void main() {
-                                vColor = color;
+                                vColor = customColor;
                                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                             }
                         `,
@@ -1607,6 +1639,7 @@
                         `,
                         transparent: true,
                         depthWrite: false,
+                        blending: THREE.AdditiveBlending
                     });
                     const trailLine = new THREE.Line(trailGeometry, trailMaterial);
                     trailLine.frustumCulled = false;
@@ -1723,6 +1756,37 @@
             rightWing.position.set(0, -0.1 * s, 0.5 * s);
             rightWing.rotation.y = 0;
             ship.add(rightWing);
+            
+            // === CABIN WINDOWS ===
+            // Glowy bright windows running along the sides
+            const windowGeo = new THREE.PlaneGeometry(0.12 * s, 0.06 * s);
+            const windowMat = new THREE.MeshBasicMaterial({
+                color: 0xffffcc,
+                transparent: true,
+                opacity: 0.9,
+                side: THREE.DoubleSide
+            });
+            
+            // 4 windows per side
+            for (let w = 0; w < 4; w++) {
+                const zPos = -1.0 * s + (w * 0.6 * s); // Space out evenly
+                
+                // Radius expands towards the rear since fuselage is a tapered cylinder
+                // r1=0.5s at front (z=-2.5s), r2=0.7s at rear (z=2.5s)
+                const t = (zPos + 2.5 * s) / (5.0 * s);
+                const currentRadius = (0.5 * s) * (1 - t) + (0.7 * s) * t;
+                const offset = currentRadius + 0.01; // Just outside hull
+                
+                const leftWindow = new THREE.Mesh(windowGeo, windowMat);
+                leftWindow.position.set(-offset + 0.02 * s, 0.1 * s, zPos);
+                leftWindow.rotation.y = -Math.PI / 2 - 0.1; // Follow the hull curvature slightly
+                ship.add(leftWindow);
+                
+                const rightWindow = new THREE.Mesh(windowGeo, windowMat);
+                rightWindow.position.set(offset - 0.02 * s, 0.1 * s, zPos);
+                rightWindow.rotation.y = Math.PI / 2 + 0.1;
+                ship.add(rightWindow);
+            }
             
             // === WINGTIP WEAPON PODS ===
             const podGeometry = new THREE.CylinderGeometry(0.12 * s, 0.15 * s, 0.8 * s, 6);
@@ -1888,14 +1952,33 @@
             ];
             
             navLights.forEach(nl => {
-                const nlGeometry = new THREE.SphereGeometry(0.25 * s, 6, 6);
-                const nlMaterial = new THREE.MeshBasicMaterial({
-                    color: nl.color, transparent: true, opacity: 1.0
+                // Outer glow - additive and larger
+                const glowGeo = new THREE.SphereGeometry(0.3 * s, 8, 8);
+                const glowMat = new THREE.MeshBasicMaterial({
+                    color: nl.color,
+                    transparent: true,
+                    opacity: 0.6,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false
                 });
-                const nlMesh = new THREE.Mesh(nlGeometry, nlMaterial);
-                nlMesh.position.set(nl.pos[0], nl.pos[1], nl.pos[2]);
-                nlMesh.name = nl.name;
-                ship.add(nlMesh);
+                const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+                glowMesh.position.set(nl.pos[0], nl.pos[1], nl.pos[2]);
+                glowMesh.name = nl.name;
+                
+                // Inner bright core - solid and small
+                const coreGeo = new THREE.SphereGeometry(0.08 * s, 4, 4);
+                // Slight lerp to white for the core so it's not totally washed out
+                const coreColor = new THREE.Color(nl.color).lerp(new THREE.Color(0xffffff), 0.8);
+                const coreMat = new THREE.MeshBasicMaterial({
+                    color: coreColor,
+                    transparent: true,
+                    opacity: 0.9,
+                    depthWrite: false
+                });
+                const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+                glowMesh.add(coreMesh); // Parent it to the glow so it pulses with it
+                
+                ship.add(glowMesh);
             });
             
             // === SELECTION RING ===
@@ -1949,32 +2032,6 @@
                 // Chance for different shape types
                 const shapeType = Math.random();
                 
-                // All asteroids use high-detail icosahedron with multi-octave displacement
-                // Detail level scales with asteroid index (first few get extra detail)
-                const detail = i < 3 ? 4 : (i < 10 ? 3 : 2);
-                let geometry = new THREE.IcosahedronGeometry(1, detail);
-                const positions = geometry.attributes.position;
-                
-                // Unique seed per asteroid for varied terrain
-                const seed1 = Math.random() * 100;
-                const seed2 = Math.random() * 100;
-                
-                for (let j = 0; j < positions.count; j++) {
-                    let x = positions.getX(j);
-                    let y = positions.getY(j);
-                    let z = positions.getZ(j);
-                    const angle1 = Math.atan2(z, x);
-                    const angle2 = Math.acos(y / Math.sqrt(x*x + y*y + z*z + 0.001));
-                    // Multi-octave displacement: ridges, craters, coarse + fine noise
-                    const ridge = Math.abs(Math.sin(angle1 * 5 + angle2 * 3 + seed1)) * 0.3;
-                    const crater = Math.max(0, Math.sin(angle1 * 8 + seed2) * Math.sin(angle2 * 6 + seed1)) * 0.2;
-                    const coarse = (Math.sin(angle1 * 2.7 + seed1) * Math.cos(angle2 * 3.1 + seed2)) * 0.15;
-                    const fine = (Math.random() - 0.5) * 0.08;
-                    const displacement = 1.0 + ridge - crater + coarse + fine;
-                    positions.setXYZ(j, x * displacement, y * displacement, z * displacement);
-                }
-                geometry.computeVertexNormals();
-                
                 // Realistic asteroid colors - based on spectral types
                 // C-type (carbonaceous): dark gray/charcoal - most common ~75%
                 // S-type (silicaceous): brownish/olive - ~17%
@@ -2005,12 +2062,50 @@
                 }
                 
                 const asteroidColor = new THREE.Color(baseR, baseG, baseB);
+                
+                // All asteroids use high-detail icosahedron with multi-octave displacement
+                // Detail level scales with asteroid index (first few get extra detail)
+                // x2 polygons: increased detail levels
+                const detail = i < 3 ? 5 : (i < 10 ? 4 : 3);
+                let geometry = new THREE.IcosahedronGeometry(1, detail);
+                const positions = geometry.attributes.position;
+                const colors = new Float32Array(positions.count * 3);
+                
+                // Unique seed per asteroid for varied terrain
+                const seed1 = Math.random() * 100;
+                const seed2 = Math.random() * 100;
+                
+                for (let j = 0; j < positions.count; j++) {
+                    let x = positions.getX(j);
+                    let y = positions.getY(j);
+                    let z = positions.getZ(j);
+                    const angle1 = Math.atan2(z, x);
+                    const angle2 = Math.acos(y / Math.sqrt(x*x + y*y + z*z + 0.001));
+                    // Multi-octave displacement: ridges, craters, coarse + fine noise
+                    // Note: multipliers on angle1 MUST be integers to prevent seam cracks when wrapping around
+                    const ridge = Math.abs(Math.sin(angle1 * 5 + angle2 * 3 + seed1)) * 0.3;
+                    const crater = Math.max(0, Math.sin(angle1 * 8 + seed2) * Math.sin(angle2 * 6 + seed1)) * 0.2;
+                    const coarse = (Math.sin(angle1 * 3 + seed1) * Math.cos(angle2 * 3 + seed2)) * 0.15;
+                    const fine = (Math.sin(x * 15.3 + seed1) * Math.cos(y * 13.7 + seed2) * Math.sin(z * 17.1)) * 0.04;
+                    const displacement = 1.0 + ridge - crater + coarse + fine;
+                    positions.setXYZ(j, x * displacement, y * displacement, z * displacement);
+                    
+                    // Vary vertex color based on displacement (craters darker, ridges lighter, plus noise)
+                    const colorVariation = (displacement - 1.0) * 0.4 + (Math.random() - 0.5) * 0.15;
+                    colors[j * 3] = Math.max(0, Math.min(1, asteroidColor.r + colorVariation));
+                    colors[j * 3 + 1] = Math.max(0, Math.min(1, asteroidColor.g + colorVariation));
+                    colors[j * 3 + 2] = Math.max(0, Math.min(1, asteroidColor.b + colorVariation));
+                }
+                geometry.computeVertexNormals();
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                
                 const material = new THREE.MeshStandardMaterial({
-                    color: asteroidColor,
+                    vertexColors: true,
                     emissive: asteroidColor,
-                    emissiveIntensity: 0.1,
+                    emissiveIntensity: 0.05,
                     roughness: 0.85 + Math.random() * 0.15,
-                    metalness: metalness
+                    metalness: metalness,
+                    flatShading: true // Gives a nice defined rocky look
                 });
                 
                 const asteroid = new THREE.Mesh(geometry, material);
@@ -2041,11 +2136,10 @@
                 
                 // Continuous power-law distribution
                 // 1 unit = 100m, so 1000 units = 100km
-                // Formula tuned so ~1 in 40 asteroids reaches near 400-500 units
-                // Some shapes elongate up to 2-3x, so a 500 scale asteroid can be 100km+ wide
+                // Formula tuned so ~1 in 40 asteroids reaches 800-1200 units, while most stay small
                 const u = Math.random();
-                let scale = 15 / Math.pow(u + 0.015, 1.2);
-                scale = Math.max(15, Math.min(500, scale)); // clamp max scale to 500
+                let scale = 15 / Math.pow(u + 0.012, 1.2);
+                scale = Math.max(15, Math.min(1200, scale)); // clamp max scale to 1200
                 
                 // Apply non-uniform scaling based on shape type
                 if (shapeType < 0.15) {
@@ -2847,11 +2941,13 @@
             const distance = startPos.distanceTo(endPos);
             
             // Create laser geometry
-            const laserGeometry = new THREE.CylinderGeometry(0.1, 0.1, distance, 8);
+            const laserGeometry = new THREE.CylinderGeometry(0.08, 0.08, distance, 6);
             const laserMaterial = new THREE.MeshBasicMaterial({
                 color: 0xff0050,
                 transparent: true,
-                opacity: 0.8
+                opacity: 0.4,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
             });
             const laser = new THREE.Mesh(laserGeometry, laserMaterial);
             
@@ -2865,11 +2961,13 @@
             lasers.push({ mesh: laser, created: Date.now() });
             
             // Muzzle flash
-            const flashGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            const flashGeometry = new THREE.SphereGeometry(0.4, 8, 8);
             const flashMaterial = new THREE.MeshBasicMaterial({
                 color: 0xff0050,
                 transparent: true,
-                opacity: 1
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
             });
             const flash = new THREE.Mesh(flashGeometry, flashMaterial);
             flash.position.copy(startPos);
@@ -2948,13 +3046,21 @@
                     particle.position.copy(ship.position);
                     particle.position.sub(forward.multiplyScalar(2.5));
                     
+                    // Particle initial velocity: inherit ship's velocity, then eject backward
+                    const ejectSpeed = 0.2 + speed * 0.5; // faster ship = faster tail ejection
+                    const particleVelocity = data.velocity.clone();
+                    particleVelocity.sub(forward.multiplyScalar(ejectSpeed));
+                    particleVelocity.x += (Math.random() - 0.5) * 0.1;
+                    particleVelocity.y += (Math.random() - 0.5) * 0.1;
+                    particleVelocity.z += (Math.random() - 0.5) * 0.1;
+                    
+                    // Tail length (life) proportional to speed (max 1.5, min 0.5)
+                    const particleLife = 0.5 + Math.min(1.0, speed * 2.0);
+
                     particle.userData = {
-                        velocity: new THREE.Vector3(
-                            (Math.random() - 0.5) * 0.1,
-                            (Math.random() - 0.5) * 0.1,
-                            0.2 + Math.random() * 0.2
-                        ),
-                        life: 1.0
+                        velocity: particleVelocity,
+                        life: particleLife,
+                        maxLife: particleLife
                     };
                     engineParticles.push(particle);
                 }
@@ -2981,7 +3087,13 @@
                     const velDiff = data.targetVelocity.clone().sub(data.velocity);
                     if (velDiff.length() > THRUST * 0.5) {
                         // Thrust toward target velocity — burns fuel
-                        const acceleration = velDiff.normalize().multiplyScalar(THRUST);
+                        const acceleration = velDiff.normalize();
+                        // Make XZ acceleration much stronger than Y (vertical) acceleration
+                        // Ships are built to thrust forwards/backwards/sideways much faster than strictly up/down
+                        acceleration.x *= 2.5;
+                        acceleration.z *= 2.5;
+                        acceleration.normalize().multiplyScalar(THRUST);
+                        
                         data.velocity.add(acceleration);
                         if (data.velocity.length() > MAX_SPEED) {
                             data.velocity.normalize().multiplyScalar(MAX_SPEED);
@@ -2998,7 +3110,11 @@
                         // Would overshoot zero — clamp (physically correct: cut engines at zero)
                         data.velocity.set(0, 0, 0);
                     } else {
-                        const brakeDir = data.velocity.clone().normalize().multiplyScalar(-THRUST);
+                        const brakeDir = data.velocity.clone().normalize();
+                        brakeDir.x *= 2.5;
+                        brakeDir.z *= 2.5;
+                        brakeDir.normalize().multiplyScalar(-THRUST);
+                        
                         data.velocity.add(brakeDir);
                     }
                     data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
@@ -3076,10 +3192,18 @@
                 const trail = data.trail;
                 if (trail) {
                     const currentSpeed = data.velocity.length();
-                    // Only record trail points when actually moving
-                    if (currentSpeed > 0.01) {
+                    // Only record trail points when actually moving. 50m/s = 0.05 km/s.
+                    // Scale KM_PER_UNIT = 100 -> 1 unit = 100km. 60fps.
+                    // 50m/s = 0.05 km/s = 0.0005 units/s = 0.0000083 units/frame
+                    if (currentSpeed > 0.000005) {
                         trail.positions.push(ship.position.clone());
-                        if (trail.positions.length > trail.maxLength) {
+                        
+                        // Calculate desired trail length based on speed.
+                        // At very low speeds, we want a shorter trail so it doesn't look like a long static string.
+                        // Multiply by 50000 so 0.00001 (low speed) gives some points, 0.001 gives max points
+                        const dynamicMaxLength = Math.max(5, Math.min(trail.maxLength, Math.floor(currentSpeed * 50000 + 5)));
+                        
+                        while (trail.positions.length > dynamicMaxLength) {
                             trail.positions.shift();
                         }
                     } else if (trail.positions.length > 0) {
@@ -3089,7 +3213,7 @@
                     
                     // Update trail geometry
                     const posAttr = trail.line.geometry.getAttribute('position');
-                    const colAttr = trail.line.geometry.getAttribute('color');
+                    const colAttr = trail.line.geometry.getAttribute('customColor');
                     const len = trail.positions.length;
                     
                     // Extract team color components
@@ -3146,8 +3270,13 @@
                         // Smooth sine wave pulsation
                         const glow = (Math.sin(time * freq * Math.PI * 2 + phase) + 1) * 0.5;  // 0 to 1
                         
-                        mesh.material.opacity = 0.2 + glow * 0.8;
-                        mesh.scale.setScalar(1.0 + glow * 1.5);
+                        mesh.material.opacity = 0.1 + glow * 0.5; // lower base opacity for additive glow
+                        mesh.scale.setScalar(0.8 + glow * 1.5);
+                        
+                        // Also pulse the inner core opacity slightly
+                        if (mesh.children && mesh.children.length > 0) {
+                            mesh.children[0].material.opacity = 0.6 + glow * 0.4;
+                        }
                     }
                 });
             });
@@ -3191,12 +3320,53 @@
                 if (obj.userData.type === 'spaceship') {
                     const fuelPct = Math.round(obj.userData.fuel / obj.userData.maxFuel * 100);
                     const fuelT = Math.round(obj.userData.fuel);
+                    
+                    // Calculate fuel burn rate (tonnes per second). 60 frames per second.
+                    let burnRate = 0;
+                    if (obj.userData.isAccelerating || obj.userData.isBraking) {
+                        burnRate = 0.4 * 60; // 0.4t per frame * 60fps = 24t/s
+                    }
+                    const burnStr = burnRate > 0 ? ` <span style="color:#ff5555">-${burnRate}t/s</span>` : '';
+                    
                     const wpnPct = Math.round(obj.userData.weapons / obj.userData.maxWeapons * 100);
-                    const speed = Math.round(obj.userData.velocity.length() * KM_PER_UNIT * 60);  // km/s (assuming 60fps)
+                    const speedRaw = obj.userData.velocity.length() * KM_PER_UNIT * 60;  // km/s (assuming 60fps)
+                    const speedStr = speedRaw < 1 ? `${Math.round(speedRaw * 1000)}m/s` : `${Math.round(speedRaw)}km/s`;
                     const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
                     const sizeM = Math.round(avgScale * KM_PER_UNIT * 1000);
                     const gForce = obj.userData.gravityMag ? (obj.userData.gravityMag * 360000).toFixed(2) : "0.00";
-                    display.innerHTML = `${obj.userData.name} <span style="color:#888">${sizeM}m</span> <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">FUEL:${fuelT}t(${fuelPct}%)</span> <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">WPN:${wpnPct}%</span> <span style="color:#bb88ff">G:${gForce}m/s²</span> <span style="color:#888">${dist} ${speed}km/s</span>`;
+                    display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
+                        <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">${obj.userData.name}</div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">SIZE</span>
+                            <span style="color:#fff;">${sizeM}m</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">FUEL</span>
+                            <span style="color:${fuelPct > 20 ? '#00ff00' : '#ff0000'}">${fuelT}t (${fuelPct}%)${burnStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">WEAPONS</span>
+                            <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">${wpnPct}%</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">G-FORCE</span>
+                            <span style="color:#bb88ff">${gForce}m/s²</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">DISTANCE</span>
+                            <span style="color:#fff;">${dist}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">SPEED</span>
+                            <span style="color:#fff;">${speedStr}</span>
+                        </div>
+                    </div>`;
                 } else if (obj.userData.type === 'asteroid') {
                     const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
@@ -3210,7 +3380,30 @@
                                    mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' :
                                    mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
                     const massColor = obj.userData.mass >= 1e9 ? '#ff6600' : '#aaaaaa';
-                    display.innerHTML = `ASTEROID <span style="color:#aaaaaa">${shape} | r=${radiusStr}</span> <span style="color:${massColor}">MASS:${massStr}</span> <span style="color:#888">${dist}</span>`;
+                    
+                    display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
+                        <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">ASTEROID</div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">SHAPE</span>
+                            <span style="color:#fff;">${shape}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">RADIUS</span>
+                            <span style="color:#fff;">${radiusStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">MASS</span>
+                            <span style="color:${massColor}">${massStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">DISTANCE</span>
+                            <span style="color:#fff;">${dist}</span>
+                        </div>
+                    </div>`;
                 }
             } else {
                 // Multiple objects selected - show avg distance
@@ -3231,7 +3424,19 @@
                     parts.push(`${asteroidCount} Asteroid${asteroidCount > 1 ? 's' : ''}`);
                 }
                 
-                display.innerHTML = `<span style="color:#44aaff">${selectedObjects.length} Selected</span> ${parts.join(' + ')} <span style="color:#888">AVG ${avgDist}</span>`;
+                display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
+                        <div style="font-size: 18px; font-weight: 700; color: #44aaff; margin-bottom: 8px;">${selectedObjects.length} SELECTED</div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">ENTITIES</span>
+                            <span style="color:#fff;">${parts.join(' + ')}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">AVG DISTANCE</span>
+                            <span style="color:#fff;">${avgDist}</span>
+                        </div>
+                    </div>`;
             }
         }
         
@@ -3325,11 +3530,33 @@
                     const a = asteroids[i], b = asteroids[j];
                     const diff = a.position.clone().sub(b.position);
                     const dist = diff.length();
-                    const avgRadA = (a.scale.x + a.scale.y + a.scale.z) / 3;
-                    const avgRadB = (b.scale.x + b.scale.y + b.scale.z) / 3;
-                    const minDist = avgRadA + avgRadB;
-                    if (dist < minDist && dist > 0.01) {
-                        const normal = diff.normalize();
+                    
+                    if (dist < 0.01) continue; // Avoid singularity
+                    
+                    const normal = diff.clone().normalize();
+                    
+                    // Calculate exact radius in the direction of the collision for both ellipsoids
+                    // Local direction from A to B (for A's radius)
+                    const aInv = a.quaternion.clone().invert();
+                    const dirA = normal.clone().negate().applyQuaternion(aInv).normalize();
+                    const radA = Math.sqrt(
+                        Math.pow(a.scale.x * dirA.x, 2) + 
+                        Math.pow(a.scale.y * dirA.y, 2) + 
+                        Math.pow(a.scale.z * dirA.z, 2)
+                    );
+                    
+                    // Local direction from B to A (for B's radius)
+                    const bInv = b.quaternion.clone().invert();
+                    const dirB = normal.clone().applyQuaternion(bInv).normalize();
+                    const radB = Math.sqrt(
+                        Math.pow(b.scale.x * dirB.x, 2) + 
+                        Math.pow(b.scale.y * dirB.y, 2) + 
+                        Math.pow(b.scale.z * dirB.z, 2)
+                    );
+                    
+                    const minDist = radA + radB;
+                    
+                    if (dist < minDist) {
                         const relVel = a.userData.velocity.clone().sub(b.userData.velocity);
                         const vDotN = relVel.dot(normal);
                         if (vDotN < 0) { // approaching
@@ -3338,10 +3565,14 @@
                             const impulse = vDotN * 0.7;
                             a.userData.velocity.sub(normal.clone().multiplyScalar(impulse * b.userData.mass / totalMass * 2));
                             b.userData.velocity.add(normal.clone().multiplyScalar(impulse * a.userData.mass / totalMass * 2));
-                            // Separate so they don't overlap
-                            const overlap = (minDist - dist) * 0.5 + 0.1;
-                            a.position.add(normal.clone().multiplyScalar(overlap));
-                            b.position.sub(normal.clone().multiplyScalar(overlap));
+                            
+                            // Separate so they don't overlap, proportional to their mass inverse
+                            const massRatioA = b.userData.mass / totalMass;
+                            const massRatioB = a.userData.mass / totalMass;
+                            const overlap = minDist - dist + 0.1;
+                            
+                            a.position.add(normal.clone().multiplyScalar(overlap * massRatioA));
+                            b.position.sub(normal.clone().multiplyScalar(overlap * massRatioB));
                         }
                     }
                 }
@@ -3437,7 +3668,7 @@
             // Z/X → radius in/out
             if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x)) {
                 const angularSpeed = 0.025;  // radians per frame
-                const radialSpeed = 30;       // units per frame
+                const radialSpeed = 10;       // Reduced from 30 for finer control
                 
                 // W/S: pitch — rotate cursorDir and cursorUp around local right axis
                 if (keys.w || keys.s) {
@@ -3571,8 +3802,8 @@
                     }
                     
                     // Z/X: radius
-                    if (keys.z) camSphereRadius -= rSpeed;
-                    if (keys.x) camSphereRadius += rSpeed;
+                    if (keys.z) camSphereRadius -= rSpeed * 0.3; // Slower zoom in
+                    if (keys.x) camSphereRadius += rSpeed * 0.3; // Slower zoom out
                     camSphereRadius = Math.max(1, camSphereRadius);  // don't go through origin
                     
                     // Update camera position from sphere coords, orbiting around camOrbitCenter
@@ -3587,6 +3818,8 @@
             }
         }
         
+        let proximityLines = [];
+        
         function updateProximityWireframe() {
             // Check all objects - if camera is inside, switch to wireframe
             const allObjects = [...asteroids];
@@ -3594,14 +3827,25 @@
             allObjects.forEach(obj => {
                 if (!obj.geometry) return;
                 
-                // Calculate bounding radius (accounting for scale)
-                obj.geometry.computeBoundingSphere();
-                const geoRadius = obj.geometry.boundingSphere.radius;
-                const maxScale = Math.max(obj.scale.x, obj.scale.y, obj.scale.z);
-                const worldRadius = geoRadius * maxScale;
+                const toCamera = cameraPosition.clone().sub(obj.position);
+                const dist = toCamera.length();
+                let isInside = false;
                 
-                const dist = cameraPosition.distanceTo(obj.position);
-                const isInside = dist < worldRadius * 1.1;  // Slightly larger threshold
+                if (dist > 0.001) {
+                    const normal = toCamera.normalize();
+                    const invQuat = obj.quaternion.clone().invert();
+                    const localDir = normal.clone().applyQuaternion(invQuat).normalize();
+                    
+                    // Approximate the radius of the displaced icosahedron in this direction
+                    // Base geometry radius is ~1 (before scale and displacement)
+                    const exactRadius = Math.sqrt(
+                        Math.pow(obj.scale.x * localDir.x, 2) + 
+                        Math.pow(obj.scale.y * localDir.y, 2) + 
+                        Math.pow(obj.scale.z * localDir.z, 2)
+                    );
+                    
+                    isInside = dist < exactRadius * 1.1; // 10% margin
+                }
                 
                 if (isInside && !obj.userData._isWireframe) {
                     // Switch to wireframe
@@ -3647,6 +3891,110 @@
                     ship.userData._isWireframe = false;
                 }
             });
+            
+            // Proximity Lines
+            const labelsContainer = document.getElementById('proximity-labels');
+            let labelIndex = 0;
+            
+            // Clean up old lines
+            while(proximityLines.length > 0) {
+                scene.remove(proximityLines.pop());
+            }
+            
+            const PROXIMITY_THRESHOLD = 80; // Distance to start showing lines (8,000 km)
+            const allEntities = [...asteroids, ...spaceships];
+            
+            for (let i = 0; i < allEntities.length; i++) {
+                for (let j = i + 1; j < allEntities.length; j++) {
+                    const a = allEntities[i], b = allEntities[j];
+                    const dist = a.position.distanceTo(b.position);
+                    
+                    const normal = a.position.clone().sub(b.position).normalize();
+                    
+                    let radA = 2;
+                    if (a.scale) {
+                        const invQuatA = a.quaternion.clone().invert();
+                        const localDirA = normal.clone().negate().applyQuaternion(invQuatA).normalize();
+                        radA = Math.sqrt(
+                            Math.pow(a.scale.x * localDirA.x, 2) + 
+                            Math.pow(a.scale.y * localDirA.y, 2) + 
+                            Math.pow(a.scale.z * localDirA.z, 2)
+                        );
+                    }
+                    
+                    let radB = 2;
+                    if (b.scale) {
+                        const invQuatB = b.quaternion.clone().invert();
+                        const localDirB = normal.clone().applyQuaternion(invQuatB).normalize();
+                        radB = Math.sqrt(
+                            Math.pow(b.scale.x * localDirB.x, 2) + 
+                            Math.pow(b.scale.y * localDirB.y, 2) + 
+                            Math.pow(b.scale.z * localDirB.z, 2)
+                        );
+                    }
+                    
+                    const surfaceDist = dist - radA - radB;
+                    
+                    if (surfaceDist > 0 && surfaceDist < PROXIMITY_THRESHOLD) {
+                        // Create 3D Line
+                        const geo = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
+                        const opacity = Math.max(0, 1.0 - (surfaceDist / PROXIMITY_THRESHOLD)); // Fades out
+                        const mat = new THREE.LineBasicMaterial({ 
+                            color: 0xff0000, 
+                            transparent: true, 
+                            opacity: opacity, 
+                            depthWrite: false
+                        });
+                        const line = new THREE.Line(geo, mat);
+                        scene.add(line);
+                        proximityLines.push(line);
+                        
+                        // Create HTML Label in middle of line
+                        const midPoint = a.position.clone().lerp(b.position, 0.5);
+                        midPoint.project(camera);
+                        
+                        if (midPoint.z < 1) { // If in front of camera
+                            const x = (midPoint.x * 0.5 + 0.5) * window.innerWidth;
+                            const y = (-midPoint.y * 0.5 + 0.5) * window.innerHeight;
+                            
+                            let labelEl = labelsContainer.children[labelIndex];
+                            if (!labelEl) {
+                                labelEl = document.createElement('div');
+                                labelEl.style.position = 'absolute';
+                                labelEl.style.color = '#ff0000';
+                                labelEl.style.fontFamily = 'monospace';
+                                labelEl.style.fontSize = '11px';
+                                labelEl.style.fontWeight = 'bold';
+                                labelEl.style.textShadow = '1px 1px 2px black, -1px -1px 2px black';
+                                labelEl.style.pointerEvents = 'none';
+                                labelEl.style.transform = 'translate(-50%, -50%)'; // Center perfectly
+                                labelsContainer.appendChild(labelEl);
+                            }
+                            
+                            // Format distance
+                            const distMeters = Math.round(surfaceDist * KM_PER_UNIT * 1000);
+                            let text = '';
+                            if (distMeters > 1000000) text = (distMeters/1000000).toFixed(1) + 'Mkm';
+                            else if (distMeters > 1000) text = (distMeters/1000).toFixed(1) + 'km';
+                            else text = distMeters + 'm';
+                            
+                            labelEl.textContent = text;
+                            labelEl.style.left = x + 'px';
+                            labelEl.style.top = y + 'px';
+                            labelEl.style.opacity = opacity;
+                            labelEl.style.display = 'block';
+                            
+                            labelIndex++;
+                        }
+                    }
+                }
+            }
+            
+            // Hide unused labels
+            while (labelIndex < labelsContainer.children.length) {
+                labelsContainer.children[labelIndex].style.display = 'none';
+                labelIndex++;
+            }
         }
         
         // Update cursor beams — L-shape from crosshair to positive sphere edge, plus orbs
