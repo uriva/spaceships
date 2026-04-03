@@ -4605,8 +4605,8 @@
                                 targetObj = nearestEnemy;
                             }
                         } else {
-                            // If target is just "enemy" or "nearest_enemy"
-                            if (targetSpec.toLowerCase().includes('enemy')) {
+                            // If target is just "enemy" or "nearest_enemy", or a typo like "enmy"
+                            if (targetSpec.match(/en.*m/i) || targetSpec.match(/hostile/i) || targetSpec.match(/target/i) || targetSpec.match(/all/i)) {
                                 // Find nearest enemy to the selected ships
                                 const ref = ships.length > 0 ? ships[0].position : (selectedObjects.length > 0 ? selectedObjects[0].position : cameraPosition);
                                 let nearestEnemy = null;
