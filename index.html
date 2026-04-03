@@ -14,10 +14,12 @@
         }
         
         body {
+            margin: 0;
             overflow: hidden;
-            background: #050508;
-            font-family: 'Share Tech Mono', monospace;
-            cursor: crosshair;
+            background: #0a0a14;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
         }
         
         #canvas-container {
@@ -732,7 +734,8 @@
             
             // Scene setup
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x050508, 0.0002);
+            // A bit more dense fog to give a sense of scale and depth
+            scene.fog = new THREE.FogExp2(0x0a0a14, 0.0003);
             
             // Camera
             camera = new THREE.PerspectiveCamera(
