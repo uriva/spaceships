@@ -3935,10 +3935,38 @@
                     
                     const surfaceDist = dist - radA - radB;
                     
-                    if (surfaceDist > 0 && surfaceDist < PROXIMITY_THRESHOLD) {
+                    const vA = a.userData.velocity || new THREE.Vector3();
+                    const vB = b.userData.velocity || new THREE.Vector3();
+                    const dV = vA.clone().sub(vB);
+                    const dP = a.position.clone().sub(b.position);
+                    const speedSq = dV.lengthSq();
+                    
+                    let timeToCollision = Infinity;
+                    let isImminent = false;
+                    
+                    if (speedSq > 1e-10) {
+                        const tc = -dP.dot(dV) / speedSq; // Time to closest approach in frames
+                        if (tc > 0 && tc < 30 * 60) { // Within 30 seconds (at 60fps)
+                            // Use closest approach to see if it's actually a collision
+                            const predDist = dP.clone().add(dV.clone().multiplyScalar(tc)).length();
+                            
+                            let maxRadA = 2;
+                            if (a.scale) maxRadA = Math.max(a.scale.x, a.scale.y, a.scale.z);
+                            let maxRadB = 2;
+                            if (b.scale) maxRadB = Math.max(b.scale.x, b.scale.y, b.scale.z);
+                            
+                            // Check if they will intersect (adding a small margin)
+                            if (predDist < (maxRadA + maxRadB) * 1.2) {
+                                isImminent = true;
+                                timeToCollision = tc / 60; // seconds
+                            }
+                        }
+                    }
+                    
+                    if (surfaceDist > 0 && isImminent) {
                         // Create 3D Line
                         const geo = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
-                        const opacity = Math.max(0, 1.0 - (surfaceDist / PROXIMITY_THRESHOLD)); // Fades out
+                        const opacity = Math.max(0.1, 1.0 - (timeToCollision / 30.0)); // Fades out based on time
                         const mat = new THREE.LineBasicMaterial({ 
                             color: 0xff0000, 
                             transparent: true, 
