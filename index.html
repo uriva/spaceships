@@ -1255,10 +1255,10 @@
 
             const numSuns = 1 + Math.floor(Math.random() * 2);
             for (let i = 0; i < numSuns; i++) {
-                const sunSize = 1500 + Math.random() * 2000; // HUGE (150-350km radius)
+                const sunSize = 7500 + Math.random() * 10000; // GIGANTIC (750-1750km radius)
                 const palette = starPalettes[Math.floor(Math.random() * starPalettes.length)];
                 // Place them much further away so they form a majestic backdrop
-                const sunPos = generateSpacedPosition(20000, 35000, 5000);
+                const sunPos = generateSpacedPosition(40000, 65000, 10000);
 
                 // ── Star surface (shader) ──
                 const sunGeometry = new THREE.SphereGeometry(sunSize, 48, 48);
@@ -2027,10 +2027,11 @@
                 
                 // Continuous power-law distribution
                 // 1 unit = 100m, so 1000 units = 100km
-                // Formula tuned so ~1 in 40 asteroids reaches near 1000 units
+                // Formula tuned so ~1 in 40 asteroids reaches near 400-500 units
+                // Some shapes elongate up to 2-3x, so a 500 scale asteroid can be 100km+ wide
                 const u = Math.random();
-                let scale = 15 / Math.pow(u + 0.01, 1.2);
-                scale = Math.max(15, Math.min(1200, scale)); // clamp [1.5km, 120km]
+                let scale = 15 / Math.pow(u + 0.015, 1.2);
+                scale = Math.max(15, Math.min(500, scale)); // clamp max scale to 500
                 
                 // Apply non-uniform scaling based on shape type
                 if (shapeType < 0.15) {
