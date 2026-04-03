@@ -2078,7 +2078,8 @@
                 isAccelerating: false,
                 isBraking: false,
                 name: config.name,
-                teamColor: 0x44aaff,
+                team: config.team,
+                teamColor: config.color,
                 engineOn: false,
                 baseY: config.y || 0,
                 fuelDepleted: false,
@@ -2408,7 +2409,7 @@
             
             // L key to focus camera on selected ship (works with or without shift, and any keyboard layout)
             // Double-tap L to zoom in closer
-            if (key === 'l' || event.key === 'L' || code === 'KeyL') {
+            if (!event.ctrlKey && !event.metaKey && (key === 'l' || event.key === 'L' || code === 'KeyL')) {
                 const now = Date.now();
                 const timeSinceLastPress = now - lastLPressTime;
                 
@@ -2424,7 +2425,7 @@
             
             // C key to focus camera on crosshair
             // Double-tap C to zoom in close to crosshair
-            if (key === 'c' || event.key === 'C' || code === 'KeyC') {
+            if (!event.ctrlKey && !event.metaKey && (key === 'c' || event.key === 'C' || code === 'KeyC')) {
                 const now = Date.now();
                 const timeSinceLastPress = now - lastCPressTime;
                 
