@@ -596,6 +596,7 @@
                 <span>SCENE</span>
             </label>
             <select id="scene-selector" style="width: 100%; margin-top: 8px; background: rgba(0,10,20,0.9); color: #00ffff; border: 1px solid rgba(0,255,255,0.3); padding: 4px 8px; font-family: 'Orbitron', sans-serif; font-size: 10px; cursor: pointer; outline: none;">
+                <option value="" disabled selected>— Select Scene —</option>
                 <option value="team-vs-team">Team vs Team</option>
                 <option value="solo-explorer">Solo Explorer</option>
             </select>
@@ -844,8 +845,7 @@
             // Global list of occupied positions to prevent overlaps
             window.occupiedPositions = [];
             
-            // Load initial scene
-            loadScene('team-vs-team');
+            // Scene starts empty — player must pick from dropdown
             
             // Wire up scene selector
             const sceneSelector = document.getElementById('scene-selector');
@@ -1652,7 +1652,7 @@
         }
         
         // ─── Scene System ───────────────────────────────────────────
-        let currentScene = 'team-vs-team';
+        let currentScene = null;
         
         function clearGameObjects() {
             // Deselect everything
