@@ -5680,7 +5680,11 @@
                 const p = a.position;
                 const sizeKm = Math.round((a.scale.x + a.scale.y + a.scale.z) / 3 * KM_PER_UNIT);
                 const label = a.userData.name || ('asteroid@[' + Math.round(p.x * KM_PER_UNIT)+','+Math.round(p.y * KM_PER_UNIT)+','+Math.round(p.z * KM_PER_UNIT)+']');
-                return `${label} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] radius~${sizeKm}km ${fmtMass(a.userData.mass)}`;
+                // Rotation: compute tumble rate as deg/s (rotationSpeed is rad/frame at 60fps)
+                const rs = a.userData.rotationSpeed;
+                const tumbleRate = rs ? Math.sqrt(rs.x*rs.x + rs.y*rs.y + rs.z*rs.z) * 60 * (180/Math.PI) : 0;
+                const tumbleStr = tumbleRate > 0.1 ? ` tumbling ${tumbleRate.toFixed(1)}°/s` : ' stable';
+                return `${label} [${Math.round(p.x * KM_PER_UNIT)},${Math.round(p.y * KM_PER_UNIT)},${Math.round(p.z * KM_PER_UNIT)}] radius~${sizeKm}km ${fmtMass(a.userData.mass)}${tumbleStr}`;
             });
             ctx += `Asteroids (${asteroids.length}): ${astData.join('; ')}`;
             
