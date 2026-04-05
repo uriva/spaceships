@@ -652,7 +652,7 @@
         
         // 3D cursor beams — position stored as spherical coords
         let cursorBeamX, cursorBeamZ, cursorBeamY, cursorOrb, cursorOrbSurface, cursorOrbSurfaceBack, cursorOrbX, cursorOrbZ, cursorOrbY, cursorOrbXn, cursorOrbZn, cursorOrbYn, cursorSurfaceBeam, cursorPos3D = new THREE.Vector3();
-        const WORLD_RADIUS = 5000;
+        let WORLD_RADIUS = 5000;
         // Cursor direction (unit vector) + local up + radius — no spherical coords, no pole singularity
         let cursorDir = new THREE.Vector3(0, 0, 1).normalize();  // initial direction
         let cursorUp = new THREE.Vector3(0, 1, 0);               // local "up" for cursor — avoids pole lock
@@ -1733,6 +1733,7 @@
             currentScene = sceneName;
             
             // Reset lighting to defaults (scenes may override below)
+            WORLD_RADIUS = 5000;
             sunLight.position.set(50, 50, 50);
             sunLight.intensity = 2;
             ambientLight.color.set(0x666666);
@@ -2310,6 +2311,8 @@
                 
                 selectShip(0);
                 
+                // Engagement zone encompasses the moon (~1,737km radius) plus ~800km margin
+                WORLD_RADIUS = 25000; // 2,500 km
                 createBoundarySphere();
                 
                 // Increase near plane for this scene (distances are huge)
@@ -3112,7 +3115,7 @@
         }
         
         function createBoundarySphere() {
-            const R = 5000;
+            const R = WORLD_RADIUS;
             const segments = 64;
             // Much brighter blue and less transparent to stand out against bright suns
             // Using custom exclusion blending so they invert against bright backgrounds
@@ -5041,9 +5044,9 @@
                     cameraMoveHeldFrames++;
                     const angularSpeed = 0.015;
                     const radialSpeed = 2;
-                    const t = Math.min(cameraMoveHeldFrames / 120, 1);
+                    const t = Math.min(cameraMoveHeldFrames / 60, 1);
                     const aSpeed = angularSpeed + t * angularSpeed * 3;  // ramp angular
-                    const rSpeed = radialSpeed + t * 38;    // ramp radial: 2 → 40
+                    const rSpeed = radialSpeed + t * 78;    // ramp radial: 2 → 80
                     
                     // W/S: pitch — rotate camSphereDir and camSphereUp around local right axis
                     if (keys.w || keys.s) {
