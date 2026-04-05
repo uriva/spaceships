@@ -851,14 +851,19 @@
             // Wire up scene selector
             const sceneSelector = document.getElementById('scene-selector');
             sceneSelector.addEventListener('change', (e) => {
-                loadScene(e.target.value);
+                const s = e.target.value;
+                const url = new URL(window.location);
+                url.searchParams.set('scene', s);
+                history.replaceState(null, '', url);
+                loadScene(s);
             });
             sceneSelector.addEventListener('keydown', (e) => e.stopPropagation());
             sceneSelector.addEventListener('keyup', (e) => e.stopPropagation());
             
-            // Auto-load default scene
-            sceneSelector.value = 'lunar-orbit';
-            loadScene('lunar-orbit');
+            // Auto-load scene from URL param or default
+            const urlScene = new URLSearchParams(window.location.search).get('scene') || 'lunar-orbit';
+            sceneSelector.value = urlScene;
+            loadScene(urlScene);
             
             // 3D cursor beams — two red lines from engagement sphere edges
             const adaptiveBlend = {
@@ -2247,13 +2252,25 @@
                     
                     // Position ~9km ahead of ship in orbit (same altitude)
                     const stA = 0.005;
-                    stGrp.position.set(
+                    const stPos = new THREE.Vector3(
                         orbitRadius * Math.cos(stA),
                         0,
                         orbitRadius * Math.sin(stA)
                     );
+                    stGrp.position.copy(stPos);
                     
+                    stGrp.userData = {
+                        type: 'asteroid',
+                        selectable: true,
+                        shapeType: 1.0,
+                        name: 'Station',
+                        rotationSpeed: { x: 0, y: 0, z: 0 },
+                        mass: 1e6, // ~1 Mt (negligible gravity)
+                        velocity: new THREE.Vector3(0, 0, 0)
+                    };
+                    asteroids.push(stGrp);
                     scene.add(stGrp);
+                    registerPosition(stPos, 30);
                 }
                 
                 selectShip(0);
@@ -6162,7 +6179,8 @@
                                    m >= 1000 ? (m/1000).toFixed(1)+'kt' : Math.round(m)+'t';
             const astData = asteroids.map(a => {
                 const p = a.position;
-                const sizeKm = Math.round((a.scale.x + a.scale.y + a.scale.z) / 3 * KM_PER_UNIT);
+                const avgScale = (a.scale.x + a.scale.y + a.scale.z) / 3;
+                const sizeKm = Math.max(1, Math.round(avgScale * KM_PER_UNIT));
                 const label = a.userData.name || ('asteroid@[' + Math.round(p.x * KM_PER_UNIT)+','+Math.round(p.y * KM_PER_UNIT)+','+Math.round(p.z * KM_PER_UNIT)+']');
                 // Rotation: compute tumble rate as deg/s (rotationSpeed is rad/frame at 60fps)
                 const rs = a.userData.rotationSpeed;
