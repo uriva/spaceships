@@ -2266,7 +2266,18 @@
                         name: 'Station',
                         rotationSpeed: { x: 0, y: 0, z: 0 },
                         mass: 1e6, // ~1 Mt (negligible gravity)
-                        velocity: new THREE.Vector3(0, 0, 0)
+                        velocity: new THREE.Vector3(0, 0, 0),
+                        // Compound collision shapes — tori are rotated PI/2 so center
+                        // circles lie in XZ plane (tube extends Y) in group-local frame.
+                        // Torus: R = center-circle radius, r = tube radius (scene units).
+                        // Cylinder: radius + halfHeight along Y axis.
+                        collisionShapes: [
+                            { type: 'torus', R: SR, r: SRr },        // Main ring: R=25 (2.5km), r=2.5 (250m)
+                            { type: 'torus', R: 12, r: 1.5 },        // Inner ring: R=12 (1.2km), r=1.5 (150m)
+                            { type: 'cylinder', radius: 5, halfHeight: 14 } // Hub + flared caps
+                        ],
+                        // Bounding sphere for quick rejection (avoidance, proximity, etc.)
+                        collisionSize: new THREE.Vector3(28, 22, 28)
                     };
                     asteroids.push(stGrp);
                     scene.add(stGrp);
@@ -4112,22 +4123,163 @@
                     }
                 }
                 
-                // Elastic collision with asteroids — ellipsoid-aware, respects rotation
+                // Elastic collision with asteroids — compound shapes or ellipsoid fallback
                 // Speed thresholds determine outcome: land / bounce / crash
                 const LAND_SPEED = 0.03;   // below this: soft landing (~300 m/s)
                 const CRASH_SPEED = 0.15;  // above this: fatal impact (~1.5 km/s)
-                const shipRadius = 2;
+                const shipRadius = 2;      // ~200m ship collision radius
                 for (const asteroid of asteroids) {
                     // Vector from asteroid center to ship (world space)
                     const toShip = ship.position.clone().sub(asteroid.position);
                     // Rotate into asteroid's local frame (rotation only — NOT scale)
                     const invQuat = asteroid.quaternion.clone().invert();
                     const localPos = toShip.applyQuaternion(invQuat);
+                    
+                    // ── Compound collision shapes (torus + cylinder) ──
+                    // Used for complex objects like the station where a single
+                    // ellipsoid can't represent the hollow torus geometry.
+                    const shapes = asteroid.userData.collisionShapes;
+                    if (shapes) {
+                        let hit = false;
+                        let bestPen = 0;         // deepest penetration
+                        let bestNormalLocal = null;
+                        let bestSurfaceLocal = null;
+                        
+                        for (const shape of shapes) {
+                            if (shape.type === 'torus') {
+                                // Torus lies in XZ plane (center circle at Y=0, radius R).
+                                // Tube cross-section radius r. Ship collides when distance
+                                // to nearest point on center circle < r + shipRadius.
+                                const R = shape.R, r = shape.r;
+                                const dxz = Math.sqrt(localPos.x * localPos.x + localPos.z * localPos.z);
+                                // Nearest point on center circle (in XZ plane at radius R)
+                                let nearX, nearZ;
+                                if (dxz > 0.001) {
+                                    nearX = localPos.x * R / dxz;
+                                    nearZ = localPos.z * R / dxz;
+                                } else {
+                                    nearX = R; nearZ = 0; // degenerate: at axis center
+                                }
+                                // Distance from ship to that nearest point on circle
+                                const dx = localPos.x - nearX;
+                                const dy = localPos.y; // center circle is at Y=0
+                                const dz = localPos.z - nearZ;
+                                const distToTube = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                const threshold = r + shipRadius;
+                                
+                                if (distToTube < threshold) {
+                                    const pen = threshold - distToTube;
+                                    if (pen > bestPen) {
+                                        bestPen = pen;
+                                        // Normal: from nearest circle point toward ship
+                                        if (distToTube > 0.001) {
+                                            bestNormalLocal = new THREE.Vector3(dx / distToTube, dy / distToTube, dz / distToTube);
+                                        } else {
+                                            bestNormalLocal = new THREE.Vector3(0, 1, 0);
+                                        }
+                                        // Surface point: on tube surface along normal from circle point
+                                        bestSurfaceLocal = new THREE.Vector3(
+                                            nearX + bestNormalLocal.x * threshold,
+                                            bestNormalLocal.y * threshold,
+                                            nearZ + bestNormalLocal.z * threshold
+                                        );
+                                        hit = true;
+                                    }
+                                }
+                            } else if (shape.type === 'cylinder') {
+                                // Cylinder along Y axis: radius in XZ, halfHeight in Y
+                                const cR = shape.radius + shipRadius;
+                                const cH = shape.halfHeight + shipRadius;
+                                const dxz = Math.sqrt(localPos.x * localPos.x + localPos.z * localPos.z);
+                                
+                                if (dxz < cR && Math.abs(localPos.y) < cH) {
+                                    // Inside cylinder — find shallowest escape
+                                    const penRadial = cR - dxz;
+                                    const penAxial = cH - Math.abs(localPos.y);
+                                    const pen = Math.min(penRadial, penAxial);
+                                    
+                                    if (pen > bestPen) {
+                                        bestPen = pen;
+                                        if (penRadial < penAxial) {
+                                            // Push outward radially
+                                            if (dxz > 0.001) {
+                                                bestNormalLocal = new THREE.Vector3(localPos.x / dxz, 0, localPos.z / dxz);
+                                            } else {
+                                                bestNormalLocal = new THREE.Vector3(1, 0, 0);
+                                            }
+                                            bestSurfaceLocal = new THREE.Vector3(
+                                                bestNormalLocal.x * cR, localPos.y, bestNormalLocal.z * cR
+                                            );
+                                        } else {
+                                            // Push out through cap
+                                            const capSign = localPos.y >= 0 ? 1 : -1;
+                                            bestNormalLocal = new THREE.Vector3(0, capSign, 0);
+                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, capSign * cH, localPos.z);
+                                        }
+                                        hit = true;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (hit && bestNormalLocal) {
+                            // Rotate normal back to world space
+                            const worldNormal = bestNormalLocal.clone().applyQuaternion(asteroid.quaternion).normalize();
+                            const vDotN = data.velocity.dot(worldNormal);
+                            
+                            if (vDotN < 0) { // only act if moving into the surface
+                                const impactSpeed = Math.abs(vDotN);
+                                
+                                // Push ship to compound surface
+                                ship.position.copy(asteroid.position).add(
+                                    bestSurfaceLocal.clone().applyQuaternion(asteroid.quaternion)
+                                );
+                                
+                                if (impactSpeed > CRASH_SPEED) {
+                                    createShipExplosion(ship.position);
+                                    const astName = asteroid.userData.name || 'asteroid';
+                                    showToast(`${data.name} CRASHED into ${astName}`, 'danger');
+                                    scene.remove(ship);
+                                    if (data.trail && data.trail.line) scene.remove(data.trail.line);
+                                    const idx = spaceships.indexOf(ship);
+                                    if (idx >= 0) spaceships.splice(idx, 1);
+                                    removeFromSelection(ship);
+                                    if (ship === selectedObject) {
+                                        selectedObject = null;
+                                        if (spaceships.length > 0) selectShip(0);
+                                    }
+                                    break;
+                                } else if (impactSpeed < LAND_SPEED) {
+                                    data.velocity.set(0, 0, 0);
+                                    data.behavior = {
+                                        type: 'landed',
+                                        asteroid: asteroid,
+                                        surfaceLocalPos: bestSurfaceLocal.clone(),
+                                        surfaceNormal: worldNormal.clone(),
+                                    };
+                                    const astName = asteroid.userData.name || 'asteroid';
+                                    shipReport(data, 'landed', `Landed on ${astName}`);
+                                    break;
+                                } else {
+                                    data.velocity.sub(worldNormal.clone().multiplyScalar(2 * vDotN));
+                                    data.velocity.multiplyScalar(0.7);
+                                    if (data.behavior && data.behavior.type === 'move') {
+                                        data.behavior = null;
+                                    }
+                                }
+                            }
+                        }
+                        continue; // skip ellipsoid fallback for this asteroid
+                    }
+                    
+                    // ── Ellipsoid fallback (normal asteroids) ──
                     // In local frame, asteroid is ellipsoid with semi-axes = scale (game units)
+                    // Groups can override with userData.collisionSize
                     // Pad by shipRadius so we detect when the ship surface touches
-                    const sx = asteroid.scale.x + shipRadius;
-                    const sy = asteroid.scale.y + shipRadius;
-                    const sz = asteroid.scale.z + shipRadius;
+                    const cs = asteroid.userData.collisionSize;
+                    const sx = (cs ? cs.x : asteroid.scale.x) + shipRadius;
+                    const sy = (cs ? cs.y : asteroid.scale.y) + shipRadius;
+                    const sz = (cs ? cs.z : asteroid.scale.z) + shipRadius;
                     // Ellipsoid test: (x/sx)² + (y/sy)² + (z/sz)² < 1 means inside
                     const ex = localPos.x / sx;
                     const ey = localPos.y / sy;
@@ -4417,7 +4569,7 @@
                     const massColor = obj.userData.mass >= 1e9 ? '#ff6600' : '#aaaaaa';
                     
                     display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
-                        <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">ASTEROID</div>
+                        <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">${(obj.userData.name || 'ASTEROID').toUpperCase()}</div>
                         
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">SHAPE</span>
@@ -4445,7 +4597,8 @@
                 const avgDist = formatDist(selectedObjects.reduce((sum, o) => sum + o.position.distanceTo(cameraPosition), 0) / selectedObjects.length);
                 
                 const ships = selectedObjects.filter(o => o.userData.type === 'spaceship');
-                const asteroidCount = selectedObjects.filter(o => o.userData.type === 'asteroid').length;
+                const namedObjects = selectedObjects.filter(o => o.userData.type === 'asteroid' && o.userData.name);
+                const asteroidCount = selectedObjects.filter(o => o.userData.type === 'asteroid' && !o.userData.name).length;
                 
                 let parts = [];
                 if (ships.length > 0) {
@@ -4455,6 +4608,7 @@
                         parts.push(`${ships.length} Ships`);
                     }
                 }
+                namedObjects.forEach(o => parts.push(o.userData.name));
                 if (asteroidCount > 0) {
                     parts.push(`${asteroidCount} Asteroid${asteroidCount > 1 ? 's' : ''}`);
                 }
@@ -4589,19 +4743,21 @@
                     // Local direction from A to B (for A's radius)
                     const aInv = a.quaternion.clone().invert();
                     const dirA = normal.clone().negate().applyQuaternion(aInv).normalize();
+                    const csA = a.userData.collisionSize;
                     const radA = Math.sqrt(
-                        Math.pow(a.scale.x * dirA.x, 2) + 
-                        Math.pow(a.scale.y * dirA.y, 2) + 
-                        Math.pow(a.scale.z * dirA.z, 2)
+                        Math.pow((csA ? csA.x : a.scale.x) * dirA.x, 2) + 
+                        Math.pow((csA ? csA.y : a.scale.y) * dirA.y, 2) + 
+                        Math.pow((csA ? csA.z : a.scale.z) * dirA.z, 2)
                     );
                     
                     // Local direction from B to A (for B's radius)
                     const bInv = b.quaternion.clone().invert();
                     const dirB = normal.clone().applyQuaternion(bInv).normalize();
+                    const csB = b.userData.collisionSize;
                     const radB = Math.sqrt(
-                        Math.pow(b.scale.x * dirB.x, 2) + 
-                        Math.pow(b.scale.y * dirB.y, 2) + 
-                        Math.pow(b.scale.z * dirB.z, 2)
+                        Math.pow((csB ? csB.x : b.scale.x) * dirB.x, 2) + 
+                        Math.pow((csB ? csB.y : b.scale.y) * dirB.y, 2) + 
+                        Math.pow((csB ? csB.z : b.scale.z) * dirB.z, 2)
                     );
                     
                     const minDist = radA + radB;
@@ -4977,10 +5133,14 @@
                     if (a.scale) {
                         const invQuatA = a.quaternion.clone().invert();
                         const localDirA = normal.clone().negate().applyQuaternion(invQuatA).normalize();
+                        const csA = a.userData.collisionSize;
+                        const sxA = csA ? csA.x : a.scale.x;
+                        const syA = csA ? csA.y : a.scale.y;
+                        const szA = csA ? csA.z : a.scale.z;
                         radA = Math.sqrt(
-                            Math.pow(a.scale.x * localDirA.x, 2) + 
-                            Math.pow(a.scale.y * localDirA.y, 2) + 
-                            Math.pow(a.scale.z * localDirA.z, 2)
+                            Math.pow(sxA * localDirA.x, 2) + 
+                            Math.pow(syA * localDirA.y, 2) + 
+                            Math.pow(szA * localDirA.z, 2)
                         );
                     }
                     
@@ -4988,10 +5148,14 @@
                     if (b.scale) {
                         const invQuatB = b.quaternion.clone().invert();
                         const localDirB = normal.clone().applyQuaternion(invQuatB).normalize();
+                        const csB = b.userData.collisionSize;
+                        const sxB = csB ? csB.x : b.scale.x;
+                        const syB = csB ? csB.y : b.scale.y;
+                        const szB = csB ? csB.z : b.scale.z;
                         radB = Math.sqrt(
-                            Math.pow(b.scale.x * localDirB.x, 2) + 
-                            Math.pow(b.scale.y * localDirB.y, 2) + 
-                            Math.pow(b.scale.z * localDirB.z, 2)
+                            Math.pow(sxB * localDirB.x, 2) + 
+                            Math.pow(syB * localDirB.y, 2) + 
+                            Math.pow(szB * localDirB.z, 2)
                         );
                     }
                     
@@ -5887,7 +6051,10 @@
                     for (const asteroid of asteroids) {
                         // Check if future position is inside asteroid
                         const toFuture = futurePos.clone().sub(asteroid.position);
-                        const maxScale = Math.max(asteroid.scale.x, asteroid.scale.y, asteroid.scale.z);
+                        const cs = asteroid.userData.collisionSize;
+                        const maxScale = cs
+                            ? Math.max(cs.x, cs.y, cs.z)
+                            : Math.max(asteroid.scale.x, asteroid.scale.y, asteroid.scale.z);
                         const dangerRadius = maxScale + 5; // 5 units safety margin
                         if (toFuture.length() < dangerRadius) {
                             // We're heading into an asteroid — compute avoidance direction
