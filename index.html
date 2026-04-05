@@ -607,7 +607,7 @@
                 <span>GRAVITY MULTIPLIER</span>
                 <span id="gravity-label" style="color: #00ffff; font-weight: bold;">1e9</span>
             </label>
-            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="4"
+            <input type="range" id="gravity-slider" min="0" max="24" step="0.5" value="0"
                 style="width: 100%; display: block; margin-top: 8px; accent-color: #00ffff; cursor: pointer;">
         </div>
         <p><span class="key">WASDZX</span> orbit camera</p>
@@ -692,7 +692,7 @@
         // G_game = G_real × (1000 kg/t) / (100 m/gu)³ / (60 frames/s)²
         //        = G_real × 1000 / 1e6 / 3600 = G_real × 2.778e-7
         const G_GAME = G_REAL * 1000 / 1e6 / 3600;  // ~1.854e-17 in game units
-        let gravityMultiplier = 100;         // ratio of effective G to real G (tunable via HUD)
+        let gravityMultiplier = 1;           // ratio of effective G to real G (tunable via HUD)
         const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
         
         // Ship movement
@@ -856,6 +856,10 @@
             sceneSelector.addEventListener('keydown', (e) => e.stopPropagation());
             sceneSelector.addEventListener('keyup', (e) => e.stopPropagation());
             
+            // Auto-load default scene
+            sceneSelector.value = 'lunar-orbit';
+            loadScene('lunar-orbit');
+            
             // 3D cursor beams — two red lines from engagement sphere edges
             const adaptiveBlend = {
                 transparent: true,
@@ -1011,7 +1015,7 @@
             
             for (let i = 0; i < count1; i++) {
                 const i3 = i * 3;
-                const radius = 6000 + Math.random() * 4000;
+                const radius = 40000 + Math.random() * 10000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -1051,7 +1055,8 @@
                 opacity: 0.9,
                 blending: THREE.AdditiveBlending,
                 sizeAttenuation: false,
-                fog: false
+                fog: false,
+                depthWrite: false
             });
             
             const starField1 = new THREE.Points(geometry1, material1);
@@ -1065,7 +1070,7 @@
             
             for (let i = 0; i < count2; i++) {
                 const i3 = i * 3;
-                const radius = 7000 + Math.random() * 3000;
+                const radius = 42000 + Math.random() * 8000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -1097,7 +1102,8 @@
                 opacity: 0.4,
                 blending: THREE.AdditiveBlending,
                 sizeAttenuation: false,
-                fog: false
+                fog: false,
+                depthWrite: false
             });
             
             const starField2 = new THREE.Points(geometry2, material2);
@@ -1111,7 +1117,7 @@
             
             for (let i = 0; i < nebulaCount; i++) {
                 const i3 = i * 3;
-                const radius = 6000 + Math.random() * 4000;
+                const radius = 41000 + Math.random() * 9000;
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
                 
@@ -1142,7 +1148,8 @@
                 opacity: 0.15,
                 blending: THREE.AdditiveBlending,
                 sizeAttenuation: false,
-                fog: false
+                fog: false,
+                depthWrite: false
             });
             
             const nebula = new THREE.Points(nebulaGeometry, nebulaMaterial);
@@ -1505,7 +1512,7 @@
                 
                 // Position planet far outside boundary (5000-8000 units), ensure separation of 1000 units
                 // We bring them slightly closer so they are visible, but still far in the skybox
-                const planetPos = generateSpacedPosition(5000, 8000, 1000);
+                const planetPos = generateSpacedPosition(40000, 48000, 1000);
                 
                 const planetGeometry = new THREE.SphereGeometry(planetSize, 32, 32);
                 
@@ -1624,7 +1631,9 @@
                 celestialBodies.push(planet);
             }
             
-            // Store for animation
+            // Store for animation — render stars first so opaque objects overwrite them
+            starFieldGroup.renderOrder = -1;
+            starFieldGroup.traverse(child => { child.renderOrder = -1; });
             scene.add(starFieldGroup);
             
             starField = {
@@ -1705,6 +1714,10 @@
             
             // Reset occupied positions
             window.occupiedPositions = [];
+            
+            // Reset camera near plane
+            camera.near = 0.1;
+            camera.updateProjectionMatrix();
         }
         
         function loadScene(sceneName) {
@@ -1791,12 +1804,155 @@
                 cameraUpVector.set(0, 1, 0);
                 updateCameraPosition();
             } else if (sceneName === 'lunar-orbit') {
-                // Moon-sized body at origin (radius ~1,737 km)
+                // Moon as a smooth sphere (radius ~1,737 km)
                 const moonRadius = 1737 / KM_PER_UNIT;
-                createSingleAsteroid({ scale: moonRadius, position: new THREE.Vector3(0, 0, 0) });
+                const moonGeo = new THREE.SphereGeometry(1, 1024, 512);
+                // Procedural moon texture with craters and maria
+                const moonTexSize = 4096;
+                const moonCanvas = document.createElement('canvas');
+                moonCanvas.width = moonTexSize;
+                moonCanvas.height = moonTexSize;
+                const mCtx = moonCanvas.getContext('2d');
                 
-                // One player ship in orbit at ~1,700 km from center
-                const orbitRadius = 1700 / KM_PER_UNIT;
+                // Base grey highland
+                mCtx.fillStyle = '#888';
+                mCtx.fillRect(0, 0, moonTexSize, moonTexSize);
+                
+                // Dark maria (basalt plains) - organic blob clusters
+                [
+                    { x: 1200, y: 1400, sz: 600 },
+                    { x: 2800, y: 1120, sz: 460 },
+                    { x: 2000, y: 2400, sz: 550 },
+                    { x: 600, y: 2800, sz: 480 },
+                    { x: 3200, y: 2600, sz: 380 },
+                    { x: 1800, y: 800, sz: 450 },
+                    { x: 3600, y: 1600, sz: 420 },
+                ].forEach(m => {
+                    const blobs = 10 + Math.floor(Math.random() * 10);
+                    for (let b = 0; b < blobs; b++) {
+                        const bx = m.x + (Math.random() - 0.5) * m.sz * 0.9;
+                        const by = m.y + (Math.random() - 0.5) * m.sz * 0.9;
+                        const br = m.sz * (0.15 + Math.random() * 0.45);
+                        const sh = 52 + Math.floor(Math.random() * 22);
+                        const g = mCtx.createRadialGradient(bx, by, br * 0.1, bx, by, br);
+                        g.addColorStop(0, `rgba(${sh},${sh},${sh + 5},0.75)`);
+                        g.addColorStop(0.5, `rgba(${sh + 5},${sh + 5},${sh + 8},0.5)`);
+                        g.addColorStop(1, 'rgba(0,0,0,0)');
+                        mCtx.fillStyle = g;
+                        mCtx.beginPath();
+                        mCtx.arc(bx, by, br, 0, Math.PI * 2);
+                        mCtx.fill();
+                    }
+                });
+                
+                // Craters - power-law distribution, drawn largest-first (oldest)
+                const craters = [];
+                for (let i = 0; i < 2500; i++) {
+                    craters.push({
+                        x: Math.random() * moonTexSize,
+                        y: Math.random() * moonTexSize,
+                        r: 2 + Math.pow(Math.random(), 2.5) * 80
+                    });
+                }
+                craters.sort((a, b) => b.r - a.r);
+                craters.forEach(c => {
+                    // Dark floor with gradient
+                    const fs = Math.floor(55 + Math.random() * 25);
+                    const fg = mCtx.createRadialGradient(c.x, c.y, 0, c.x, c.y, c.r);
+                    fg.addColorStop(0, `rgb(${fs},${fs},${fs})`);
+                    fg.addColorStop(0.85, `rgb(${fs + 15},${fs + 15},${fs + 15})`);
+                    fg.addColorStop(1, `rgb(${fs + 15},${fs + 15},${fs + 15})`);
+                    mCtx.fillStyle = fg;
+                    mCtx.beginPath();
+                    mCtx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+                    mCtx.fill();
+                    // Bright rim
+                    const rs = Math.floor(135 + Math.random() * 50);
+                    mCtx.strokeStyle = `rgb(${rs},${rs},${rs})`;
+                    mCtx.lineWidth = Math.max(1, c.r * 0.12);
+                    mCtx.beginPath();
+                    mCtx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+                    mCtx.stroke();
+                    // Shadow crescent (sunlight from upper-left)
+                    if (c.r > 6) {
+                        mCtx.strokeStyle = 'rgba(25,25,28,0.5)';
+                        mCtx.lineWidth = Math.max(1, c.r * 0.18);
+                        mCtx.beginPath();
+                        mCtx.arc(c.x, c.y, c.r * 0.88, 2.2, 4.2);
+                        mCtx.stroke();
+                    }
+                    // Central peak for larger craters
+                    if (c.r > 18 && Math.random() > 0.4) {
+                        const ps = Math.floor(105 + Math.random() * 30);
+                        mCtx.fillStyle = `rgb(${ps},${ps},${ps})`;
+                        mCtx.beginPath();
+                        mCtx.arc(c.x, c.y, c.r * 0.08 + 1, 0, Math.PI * 2);
+                        mCtx.fill();
+                    }
+                    // Ejecta rays for biggest craters
+                    if (c.r > 35) {
+                        const nR = 3 + Math.floor(Math.random() * 5);
+                        for (let r = 0; r < nR; r++) {
+                            const ra = Math.random() * Math.PI * 2;
+                            const rl = c.r * (1.5 + Math.random() * 2.5);
+                            mCtx.strokeStyle = `rgba(155,155,155,${0.08 + Math.random() * 0.1})`;
+                            mCtx.lineWidth = c.r * (0.04 + Math.random() * 0.06);
+                            mCtx.beginPath();
+                            mCtx.moveTo(c.x + Math.cos(ra) * c.r, c.y + Math.sin(ra) * c.r);
+                            mCtx.lineTo(c.x + Math.cos(ra) * (c.r + rl), c.y + Math.sin(ra) * (c.r + rl));
+                            mCtx.stroke();
+                        }
+                    }
+                });
+                
+                // Fine noise
+                const imgData = mCtx.getImageData(0, 0, moonTexSize, moonTexSize);
+                for (let i = 0; i < imgData.data.length; i += 4) {
+                    const noise = (Math.random() - 0.5) * 16;
+                    imgData.data[i] = Math.max(0, Math.min(255, imgData.data[i] + noise));
+                    imgData.data[i+1] = Math.max(0, Math.min(255, imgData.data[i+1] + noise));
+                    imgData.data[i+2] = Math.max(0, Math.min(255, imgData.data[i+2] + noise));
+                }
+                mCtx.putImageData(imgData, 0, 0);
+                
+                const moonTexture = new THREE.CanvasTexture(moonCanvas);
+                moonTexture.wrapS = THREE.RepeatWrapping;
+                moonTexture.wrapT = THREE.RepeatWrapping;
+                moonTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                moonTexture.minFilter = THREE.LinearMipmapLinearFilter;
+                moonTexture.magFilter = THREE.LinearFilter;
+                
+                const moonMat = new THREE.MeshStandardMaterial({
+                    map: moonTexture,
+                    roughness: 0.95,
+                    metalness: 0.0,
+                    flatShading: false,
+                    fog: false
+                });
+                const moon = new THREE.Mesh(moonGeo, moonMat);
+                moon.scale.set(moonRadius, moonRadius, moonRadius);
+                moon.position.set(0, 0, 0);
+
+                // Mass from volume and density (tonnes)
+                const radiusM = moonRadius * 100; // meters
+                const volumeM3 = (4 / 3) * Math.PI * radiusM * radiusM * radiusM;
+                const moonMass = volumeM3 * ROCK_DENSITY / 1000;
+                
+                moon.userData = {
+                    type: 'asteroid',
+                    selectable: true,
+                    shapeType: 1.0,
+                    name: 'Moon',
+                    rotationSpeed: { x: 0, y: 0.0001, z: 0 },
+                    mass: moonMass,
+                    velocity: new THREE.Vector3(0, 0, 0)
+                };
+                asteroids.push(moon);
+                scene.add(moon);
+                registerPosition(new THREE.Vector3(0, 0, 0), moonRadius * 1.5);
+                
+                // Ship in low orbit ~100 km above surface
+                const orbitRadius = 1837 / KM_PER_UNIT;
                 const config = {
                     x: orbitRadius, y: 0, z: 0,
                     color: 0x44aaff,
@@ -1845,28 +2001,273 @@
                 };
                 
                 // Set ship to orbit the moon
-                const moonAsteroid = asteroids[asteroids.length - 1];
                 ship.userData.behavior = {
                     type: 'orbit',
-                    body: moonAsteroid,
+                    body: moon,
                     radius: orbitRadius,
                     phase: 'freefall'
                 };
-                // Give initial orbital velocity (tangent to orbit, perpendicular to radial direction)
-                // Ship is at +X, so orbital velocity is in +Z direction
-                const G_eff = 6.674e-11 * (window.gravityMultiplier || 1);
-                const moonMass = moonAsteroid.userData.mass;
+                // Initial orbital velocity: tangent to orbit (ship at +X, velocity in +Z)
+                const G_eff = G_GAME * gravityMultiplier;
                 const orbitalSpeed = Math.sqrt(G_eff * moonMass / orbitRadius);
                 ship.userData.velocity = new THREE.Vector3(0, 0, orbitalSpeed);
+                
+                // === SPACE STATION (~5km diameter, city-sized) ===
+                {
+                    const stGrp = new THREE.Group();
+                    
+                    // Procedural window texture (color map + emissive map)
+                    const TX = 512;
+                    const stWins = [];
+                    for (let gx = 0; gx < TX; gx += 24) {
+                        for (let gy = 0; gy < TX; gy += 24) {
+                            if (Math.random() > 0.3) {
+                                stWins.push({
+                                    x: gx + 4 + Math.random() * 10,
+                                    y: gy + 4 + Math.random() * 10,
+                                    w: 3 + Math.random() * 7,
+                                    h: 2 + Math.random() * 5,
+                                    c: ['#ffd700','#ffe8b0','#fff','#80d0ff','#ff8040','#e8d870'][Math.floor(Math.random() * 6)]
+                                });
+                            }
+                        }
+                    }
+                    
+                    function stTexFn(isColor) {
+                        const cv = document.createElement('canvas');
+                        cv.width = TX; cv.height = TX;
+                        const cx = cv.getContext('2d');
+                        cx.fillStyle = isColor ? '#181c22' : '#000';
+                        cx.fillRect(0, 0, TX, TX);
+                        if (isColor) {
+                            cx.strokeStyle = '#22272e';
+                            cx.lineWidth = 1;
+                            for (let i = 0; i < TX; i += 24) {
+                                cx.beginPath(); cx.moveTo(i, 0); cx.lineTo(i, TX); cx.stroke();
+                                cx.beginPath(); cx.moveTo(0, i); cx.lineTo(TX, i); cx.stroke();
+                            }
+                        }
+                        stWins.forEach(w => {
+                            cx.fillStyle = isColor ? w.c : '#fff';
+                            cx.fillRect(w.x, w.y, w.w, w.h);
+                        });
+                        const t = new THREE.CanvasTexture(cv);
+                        t.wrapS = THREE.RepeatWrapping;
+                        t.wrapT = THREE.RepeatWrapping;
+                        return t;
+                    }
+                    
+                    const stColTex = stTexFn(true);
+                    const stEmTex = stTexFn(false);
+                    
+                    // Materials
+                    const stWinMat = new THREE.MeshStandardMaterial({
+                        map: stColTex, emissiveMap: stEmTex,
+                        emissive: new THREE.Color(1, 0.9, 0.7),
+                        emissiveIntensity: 2.0,
+                        roughness: 0.6, metalness: 0.4, fog: false
+                    });
+                    const stHullMat = new THREE.MeshStandardMaterial({
+                        color: 0x3a3e45, roughness: 0.5, metalness: 0.7, fog: false
+                    });
+                    const stDarkMat = new THREE.MeshStandardMaterial({
+                        color: 0x1a1d22, roughness: 0.4, metalness: 0.8, fog: false
+                    });
+                    const stSolarMat = new THREE.MeshStandardMaterial({
+                        color: 0x0a1040, roughness: 0.3, metalness: 0.5,
+                        emissive: new THREE.Color(0.02, 0.02, 0.08), fog: false
+                    });
+                    
+                    const SR = 25, SRr = 2.5; // Main ring: 2.5km major radius, 250m tube
+                    
+                    // Main habitat ring (torus with tiled window texture)
+                    const rColT = stColTex.clone(); rColT.repeat.set(60, 8);
+                    const rEmT = stEmTex.clone(); rEmT.repeat.set(60, 8);
+                    const sRing = new THREE.Mesh(
+                        new THREE.TorusGeometry(SR, SRr, 24, 128),
+                        new THREE.MeshStandardMaterial({
+                            map: rColT, emissiveMap: rEmT,
+                            emissive: new THREE.Color(1, 0.9, 0.7),
+                            emissiveIntensity: 2.0,
+                            roughness: 0.6, metalness: 0.4, fog: false
+                        })
+                    );
+                    sRing.rotation.x = Math.PI / 2;
+                    stGrp.add(sRing);
+                    
+                    // Inner structural ring (1.2km radius, 150m tube)
+                    const iColT = stColTex.clone(); iColT.repeat.set(30, 5);
+                    const iEmT = stEmTex.clone(); iEmT.repeat.set(30, 5);
+                    const sIRing = new THREE.Mesh(
+                        new THREE.TorusGeometry(12, 1.5, 16, 64),
+                        new THREE.MeshStandardMaterial({
+                            map: iColT, emissiveMap: iEmT,
+                            emissive: new THREE.Color(1, 0.9, 0.7),
+                            emissiveIntensity: 1.5,
+                            roughness: 0.6, metalness: 0.4, fog: false
+                        })
+                    );
+                    sIRing.rotation.x = Math.PI / 2;
+                    stGrp.add(sIRing);
+                    
+                    // Central hub cylinder (700m diameter, 2.2km long)
+                    stGrp.add(new THREE.Mesh(
+                        new THREE.CylinderGeometry(3.5, 3.5, 22, 32), stHullMat
+                    ));
+                    
+                    // Hub end caps (flared)
+                    const capG = new THREE.CylinderGeometry(5, 3.5, 3, 32);
+                    const cap1 = new THREE.Mesh(capG, stDarkMat);
+                    cap1.position.y = 12.5;
+                    stGrp.add(cap1);
+                    const cap2 = new THREE.Mesh(capG.clone(), stDarkMat);
+                    cap2.position.y = -12.5;
+                    cap2.rotation.x = Math.PI;
+                    stGrp.add(cap2);
+                    
+                    // Hub detail rings
+                    for (let i = -8; i <= 8; i += 4) {
+                        const dr = new THREE.Mesh(
+                            new THREE.TorusGeometry(3.8, 0.25, 8, 32), stDarkMat
+                        );
+                        dr.position.y = i;
+                        stGrp.add(dr);
+                    }
+                    
+                    // Outer spokes (hub to main ring, 8)
+                    for (let i = 0; i < 8; i++) {
+                        const a = (i / 8) * Math.PI * 2;
+                        const len = SR - 5;
+                        const sp = new THREE.Mesh(
+                            new THREE.BoxGeometry(len, 0.6, 0.6), stHullMat
+                        );
+                        sp.position.set(Math.cos(a) * (5 + len / 2), 0, Math.sin(a) * (5 + len / 2));
+                        sp.rotation.y = -a;
+                        stGrp.add(sp);
+                    }
+                    
+                    // Inner spokes (hub to inner ring, 8, offset)
+                    for (let i = 0; i < 8; i++) {
+                        const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+                        const len = 12 - 5;
+                        const sp = new THREE.Mesh(
+                            new THREE.BoxGeometry(len, 0.4, 0.4), stDarkMat
+                        );
+                        sp.position.set(Math.cos(a) * (5 + len / 2), 0, Math.sin(a) * (5 + len / 2));
+                        sp.rotation.y = -a;
+                        stGrp.add(sp);
+                    }
+                    
+                    // Building clusters on outer ring (24 clusters, city skyline)
+                    for (let ci = 0; ci < 24; ci++) {
+                        const theta = (ci / 24) * Math.PI * 2;
+                        const nb = 3 + Math.floor(Math.random() * 6);
+                        for (let b = 0; b < nb; b++) {
+                            const bw = 0.3 + Math.random() * 0.7;
+                            const bh = 0.4 + Math.random() * 2.8;
+                            const bd = 0.3 + Math.random() * 0.7;
+                            const tOff = ((Math.random() - 0.5) * 2.5) / SR;
+                            const t = theta + tOff;
+                            const ct = Math.cos(t), st = Math.sin(t);
+                            const bR = SR + SRr + bh / 2;
+                            const bld = new THREE.Mesh(
+                                new THREE.BoxGeometry(bw, bh, bd), stWinMat
+                            );
+                            bld.position.set(ct * bR, 0, st * bR);
+                            bld.quaternion.setFromUnitVectors(
+                                new THREE.Vector3(0, 1, 0),
+                                new THREE.Vector3(ct, 0, st)
+                            );
+                            stGrp.add(bld);
+                        }
+                    }
+                    
+                    // Solar panel arrays (4, extending from hub top/bottom)
+                    for (let i = 0; i < 4; i++) {
+                        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+                        const yS = (i % 2 === 0) ? 1 : -1;
+                        const px = Math.cos(a) * 5.5, pz = Math.sin(a) * 5.5;
+                        const arm = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.15, 0.15, 10, 6), stDarkMat
+                        );
+                        arm.position.set(px, yS * 16, pz);
+                        stGrp.add(arm);
+                        const pan = new THREE.Mesh(
+                            new THREE.BoxGeometry(14, 0.08, 7), stSolarMat
+                        );
+                        pan.position.set(px, yS * 21, pz);
+                        pan.rotation.y = -a;
+                        stGrp.add(pan);
+                    }
+                    
+                    // Communication dishes (top of hub)
+                    for (let i = 0; i < 3; i++) {
+                        const a = (i / 3) * Math.PI * 2 + 0.3;
+                        const dx = Math.cos(a) * 7, dz = Math.sin(a) * 7;
+                        const dish = new THREE.Mesh(
+                            new THREE.SphereGeometry(1.5, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+                            stHullMat
+                        );
+                        dish.position.set(dx, 13, dz);
+                        dish.rotation.x = Math.PI;
+                        stGrp.add(dish);
+                        const rod = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.06, 0.06, 3, 4), stDarkMat
+                        );
+                        rod.position.set(dx, 15, dz);
+                        stGrp.add(rod);
+                    }
+                    
+                    // Docking port (extending arm + bay)
+                    const dArm = new THREE.Mesh(
+                        new THREE.BoxGeometry(10, 0.7, 0.7), stHullMat
+                    );
+                    dArm.position.set(SR + 7, 0, 0);
+                    stGrp.add(dArm);
+                    const dBay = new THREE.Mesh(
+                        new THREE.BoxGeometry(4, 2.5, 4), stWinMat
+                    );
+                    dBay.position.set(SR + 13, 0, 0);
+                    stGrp.add(dBay);
+                    
+                    // Navigation lights
+                    const nlGeo = new THREE.SphereGeometry(0.25, 8, 8);
+                    [
+                        [[SR + SRr + 1, 0, 0], 0xff0000],
+                        [[-(SR + SRr + 1), 0, 0], 0x00ff00],
+                        [[0, 14, 0], 0xffffff],
+                        [[0, -14, 0], 0xffffff],
+                        [[0, 0, SR + SRr + 1], 0xff4400],
+                        [[0, 0, -(SR + SRr + 1)], 0x0044ff],
+                    ].forEach(([p, c]) => {
+                        const nl = new THREE.Mesh(nlGeo, new THREE.MeshBasicMaterial({ color: c }));
+                        nl.position.set(p[0], p[1], p[2]);
+                        stGrp.add(nl);
+                    });
+                    
+                    // Position ~9km ahead of ship in orbit (same altitude)
+                    const stA = 0.005;
+                    stGrp.position.set(
+                        orbitRadius * Math.cos(stA),
+                        0,
+                        orbitRadius * Math.sin(stA)
+                    );
+                    
+                    scene.add(stGrp);
+                }
                 
                 selectShip(0);
                 
                 createBoundarySphere();
                 
-                // Camera looking at the moon from behind the ship's orbit
-                camOrbitCenter.set(0, 0, 0);
-                camSphereRadius = orbitRadius * 2.5;
-                camSphereDir.set(1, 0.3, 0.5).normalize();
+                // Increase near plane for this scene (distances are huge)
+                camera.near = 1;
+                camera.updateProjectionMatrix();
+                
+                // Camera above ship looking down at moon surface
+                camOrbitCenter.copy(ship.position);
+                camSphereRadius = 200;
+                camSphereDir.set(0, 0.5, -1).normalize();
                 camSphereUp.set(0, 1, 0);
                 cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
                 cameraTarget.copy(camOrbitCenter);
