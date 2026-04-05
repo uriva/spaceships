@@ -728,6 +728,7 @@
         const CAMERA_MOVE_SPEED_MAX = 10.0;
         const CAMERA_ACCEL_FRAMES = 45;  // frames to reach max speed
         let cameraMoveHeldFrames = 0;
+        let cursorMoveHeldFrames = 0;
         const WORLD_BOUNDARY = 5000;
         
         // Double-tap tracking for L key
@@ -4562,6 +4563,11 @@
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">HULL</span>
+                            <span style="color:${obj.userData.hp > 60 ? '#00ff00' : obj.userData.hp > 30 ? '#ffaa00' : '#ff0000'}">${obj.userData.hp}%</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">G-FORCE</span>
                             <span style="color:#bb88ff">${gForce}m/s²</span>
                         </div>
@@ -4605,6 +4611,8 @@
                     const objSpeedStr = objSpeed < 0.001 ? 'Stationary'
                         : objSpeed < 1 ? `${Math.round(objSpeed * 1000)}m/s`
                         : `${objSpeed.toFixed(1)}km/s`;
+                    // Gravitational acceleration sensed at this object's position
+                    const gForce = obj.userData.gravityMag ? (obj.userData.gravityMag * 360000).toFixed(2) : "0.00";
                     
                     display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
                         <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">${(obj.userData.name || 'ASTEROID').toUpperCase()}</div>
@@ -4622,6 +4630,11 @@
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">MASS</span>
                             <span style="color:${massColor}">${massStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">G-FORCE</span>
+                            <span style="color:#bb88ff">${gForce}m/s²</span>
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
@@ -4751,6 +4764,7 @@
                     gravAccel.add(toOther.normalize().multiplyScalar(strength));
                 }
                 asteroid.userData.velocity.add(gravAccel);
+                asteroid.userData.gravityMag = gravAccel.length(); // Save for HUD
                 
                 // Move asteroid
                 asteroid.position.add(asteroid.userData.velocity);
@@ -4928,8 +4942,10 @@
             // W/S → pitch (rotate around local right axis), A/D → yaw (rotate around cursorUp)
             // Z/X → radius in/out
             if (keys.shift && !keys.space && (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x)) {
+                cursorMoveHeldFrames++;
                 const angularSpeed = 0.025;  // radians per frame
-                const radialSpeed = 10;       // Reduced from 30 for finer control
+                const ct = Math.min(cursorMoveHeldFrames / 60, 1);
+                const radialSpeed = 10 + ct * 70;  // ramp: 10 → 80
                 
                 // W/S: pitch — rotate cursorDir and cursorUp around local right axis
                 if (keys.w || keys.s) {
@@ -4965,6 +4981,8 @@
                 // Update Cartesian position
                 cursorPos3D.copy(cursorDir).multiplyScalar(cursorRadius);
                 return; // don't move camera
+            } else {
+                cursorMoveHeldFrames = 0;
             }
             
             if (keys.space) {
