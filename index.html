@@ -695,6 +695,9 @@
         let gravityMultiplier = 1;           // ratio of effective G to real G (tunable via HUD)
         const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
         
+        // Scene lighting (set in init, reconfigured per-scene in loadScene)
+        let ambientLight, sunLight, blueLight, pinkLight;
+        
         // Ship movement
         let targetPosition = null;
         let isMoving = false;
@@ -821,22 +824,22 @@
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             document.getElementById('canvas-container').appendChild(renderer.domElement);
             
-            // Lighting
-            const ambientLight = new THREE.AmbientLight(0x666666, 1.5);
+            // Lighting (module-scoped so scenes can reconfigure)
+            ambientLight = new THREE.AmbientLight(0x666666, 1.5);
             scene.add(ambientLight);
             
-            const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+            sunLight = new THREE.DirectionalLight(0xffffff, 2);
             sunLight.position.set(50, 50, 50);
             sunLight.castShadow = true;
             sunLight.shadow.mapSize.width = 2048;
             sunLight.shadow.mapSize.height = 2048;
             scene.add(sunLight);
             
-            const blueLight = new THREE.PointLight(0x00ffff, 0.8, 100);
+            blueLight = new THREE.PointLight(0x00ffff, 0.8, 100);
             blueLight.position.set(-30, 20, -30);
             scene.add(blueLight);
             
-            const pinkLight = new THREE.PointLight(0xff0050, 0.6, 80);
+            pinkLight = new THREE.PointLight(0xff0050, 0.6, 80);
             pinkLight.position.set(30, -10, 30);
             scene.add(pinkLight);
             
@@ -1729,6 +1732,15 @@
             clearGameObjects();
             currentScene = sceneName;
             
+            // Reset lighting to defaults (scenes may override below)
+            sunLight.position.set(50, 50, 50);
+            sunLight.intensity = 2;
+            ambientLight.color.set(0x666666);
+            ambientLight.intensity = 1.5;
+            blueLight.intensity = 0.8;
+            pinkLight.intensity = 0.6;
+            scene.fog = new THREE.FogExp2(0x0a0a14, 0.00008);
+            
             if (sceneName === 'team-vs-team') {
                 createSpaceships();
                 createAsteroids();
@@ -1955,6 +1967,18 @@
                 asteroids.push(moon);
                 scene.add(moon);
                 registerPosition(new THREE.Vector3(0, 0, 0), moonRadius * 1.5);
+                
+                // Lunar lighting — directional "sun" from far away so moon has
+                // a realistic day/night terminator. Low ambient for dark side.
+                sunLight.position.set(1, 0.3, 0.5).normalize().multiplyScalar(50000);
+                sunLight.intensity = 3;
+                ambientLight.color.set(0x111111);
+                ambientLight.intensity = 0.4;
+                // Disable the small-range colored point lights (irrelevant at lunar scale)
+                blueLight.intensity = 0;
+                pinkLight.intensity = 0;
+                // Disable fog for lunar scene (moon is huge, fog washes it out)
+                scene.fog = null;
                 
                 // Ship in low orbit ~100 km above surface
                 const orbitRadius = 1837 / KM_PER_UNIT;
@@ -4555,10 +4579,15 @@
                         </div>
                     </div>`;
                 } else if (obj.userData.type === 'asteroid') {
+                    const isStation = !!obj.userData.collisionShapes;
                     const shape = obj.userData.shapeType < 0.15 ? 'Potato' : 
                                   obj.userData.shapeType < 0.30 ? 'Elongated' :
                                   obj.userData.shapeType < 0.40 ? 'Lumpy' : 'Rock';
-                    const avgScale = (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
+                    // For compound objects (station), use collisionSize; for asteroids, use scale
+                    const cs = obj.userData.collisionSize;
+                    const avgScale = cs
+                        ? (cs.x + cs.y + cs.z) / 3
+                        : (obj.scale.x + obj.scale.y + obj.scale.z) / 3;
                     const radiusKm = (avgScale * KM_PER_UNIT);
                     const radiusStr = radiusKm >= 1 ? radiusKm.toFixed(1) + 'km' : Math.round(radiusKm * 1000) + 'm';
                     const mass = obj.userData.mass;
@@ -4567,23 +4596,34 @@
                                    mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' :
                                    mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
                     const massColor = obj.userData.mass >= 1e9 ? '#ff6600' : '#aaaaaa';
+                    // Speed for all objects
+                    const vel = obj.userData.velocity;
+                    const objSpeed = vel ? vel.length() * KM_PER_UNIT * 60 : 0; // km/s at 60fps
+                    const objSpeedStr = objSpeed < 0.001 ? 'Stationary'
+                        : objSpeed < 1 ? `${Math.round(objSpeed * 1000)}m/s`
+                        : `${objSpeed.toFixed(1)}km/s`;
                     
                     display.innerHTML = `<div style="display: flex; flex-direction: column; gap: 4px;">
                         <div style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;">${(obj.userData.name || 'ASTEROID').toUpperCase()}</div>
                         
-                        <div style="display: flex; justify-content: space-between;">
+                        ${isStation ? '' : `<div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">SHAPE</span>
                             <span style="color:#fff;">${shape}</span>
-                        </div>
+                        </div>`}
                         
                         <div style="display: flex; justify-content: space-between;">
-                            <span style="color:#aaa;">RADIUS</span>
+                            <span style="color:#aaa;">${isStation ? 'EXTENT' : 'RADIUS'}</span>
                             <span style="color:#fff;">${radiusStr}</span>
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color:#aaa;">MASS</span>
                             <span style="color:${massColor}">${massStr}</span>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color:#aaa;">SPEED</span>
+                            <span style="color:#fff;">${objSpeedStr}</span>
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
