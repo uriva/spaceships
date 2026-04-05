@@ -599,6 +599,7 @@
                 <option value="" disabled selected>— Select Scene —</option>
                 <option value="team-vs-team">Team vs Team</option>
                 <option value="solo-explorer">Solo Explorer</option>
+                <option value="lunar-orbit">Lunar Orbit</option>
             </select>
         </div>
         <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
@@ -1784,6 +1785,88 @@
                 camOrbitCenter.set(0, 0, 1200);
                 camSphereRadius = 500;
                 camSphereDir.set(0, 0.3, 1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
+            } else if (sceneName === 'lunar-orbit') {
+                // Moon-sized body at origin (radius ~1,737 km)
+                const moonRadius = 1737 / KM_PER_UNIT;
+                createSingleAsteroid({ scale: moonRadius, position: new THREE.Vector3(0, 0, 0) });
+                
+                // One player ship in orbit at ~1,700 km from center
+                const orbitRadius = 1700 / KM_PER_UNIT;
+                const config = {
+                    x: orbitRadius, y: 0, z: 0,
+                    color: 0x44aaff,
+                    team: 'player',
+                    name: 'Orbiter-01'
+                };
+                const ship = createSingleSpaceship(config, 0);
+                ship.position.set(config.x, config.y, config.z);
+                registerPosition(new THREE.Vector3(config.x, config.y, config.z), 3);
+                spaceships.push(ship);
+                scene.add(ship);
+                
+                // Create trail for the ship
+                const TRAIL_LENGTH = 60;
+                const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                const trailColors = new Float32Array(TRAIL_LENGTH * 4);
+                const trailGeometry = new THREE.BufferGeometry();
+                trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
+                const trailMaterial = new THREE.ShaderMaterial({
+                    vertexShader: `
+                        attribute vec4 customColor;
+                        varying vec4 vColor;
+                        void main() {
+                            vColor = customColor;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        varying vec4 vColor;
+                        void main() {
+                            gl_FragColor = vColor;
+                        }
+                    `,
+                    transparent: true,
+                    depthWrite: false,
+                    blending: THREE.AdditiveBlending
+                });
+                const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                trailLine.frustumCulled = false;
+                scene.add(trailLine);
+                ship.userData.trail = {
+                    line: trailLine,
+                    positions: [],
+                    maxLength: TRAIL_LENGTH,
+                };
+                
+                // Set ship to orbit the moon
+                const moonAsteroid = asteroids[asteroids.length - 1];
+                ship.userData.behavior = {
+                    type: 'orbit',
+                    body: moonAsteroid,
+                    radius: orbitRadius,
+                    phase: 'freefall'
+                };
+                // Give initial orbital velocity (tangent to orbit, perpendicular to radial direction)
+                // Ship is at +X, so orbital velocity is in +Z direction
+                const G_eff = 6.674e-11 * (window.gravityMultiplier || 1);
+                const moonMass = moonAsteroid.userData.mass;
+                const orbitalSpeed = Math.sqrt(G_eff * moonMass / orbitRadius);
+                ship.userData.velocity = new THREE.Vector3(0, 0, orbitalSpeed);
+                
+                selectShip(0);
+                
+                createBoundarySphere();
+                
+                // Camera looking at the moon from behind the ship's orbit
+                camOrbitCenter.set(0, 0, 0);
+                camSphereRadius = orbitRadius * 2.5;
+                camSphereDir.set(1, 0.3, 0.5).normalize();
                 camSphereUp.set(0, 1, 0);
                 cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
                 cameraTarget.copy(camOrbitCenter);
