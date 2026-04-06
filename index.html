@@ -686,7 +686,7 @@
         const MAX_SPEED = 0.5;              // 0.5 units/frame = ~5 km/s
         const THRUST = 0.015;               // engine thrust as acceleration: ~0.15 km/s² (2 MN on 50kt)
         const SHIP_MASS = 50000;            // tonnes
-        const WEAPON_CHARGES = 100;         // laser capacitor charges
+        const WEAPON_CHARGES = 100;         // battery capacity (shields + weapons)
         const G_REAL = 6.674e-11;           // real gravitational constant (m³/(kg·s²))
         // Convert to game units: gu for distance (1gu=100m), tonnes for mass, frames for time (60fps)
         // G_game = G_real × (1000 kg/t) / (100 m/gu)³ / (60 frames/s)²
@@ -1946,7 +1946,8 @@
                     roughness: 0.95,
                     metalness: 0.0,
                     flatShading: false,
-                    fog: false
+                    fog: false,
+                    side: THREE.DoubleSide
                 });
                 const moon = new THREE.Mesh(moonGeo, moonMat);
                 moon.scale.set(moonRadius, moonRadius, moonRadius);
@@ -1981,6 +1982,96 @@
                 pinkLight.intensity = 0;
                 // Disable fog for lunar scene (moon is huge, fog washes it out)
                 scene.fog = null;
+                
+                // === EARTH — 384,400 km away, radius 6,371 km ===
+                const earthRadius = 6371 / KM_PER_UNIT; // 63,710 scene units
+                const earthDistance = 384400 / KM_PER_UNIT; // 3,844,000 scene units
+                
+                // Procedural Earth texture
+                const earthCanvas = document.createElement('canvas');
+                earthCanvas.width = 512;
+                earthCanvas.height = 256;
+                const ectx = earthCanvas.getContext('2d');
+                
+                // Deep ocean base
+                ectx.fillStyle = '#0a2a5a';
+                ectx.fillRect(0, 0, 512, 256);
+                
+                // Continents — simplified shapes using ellipses and rects
+                ectx.fillStyle = '#2a6e2a';
+                const drawContinent = (cx, cy, w, h, rot) => {
+                    ectx.save();
+                    ectx.translate(cx, cy);
+                    ectx.rotate(rot || 0);
+                    ectx.beginPath();
+                    ectx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2);
+                    ectx.fill();
+                    ectx.restore();
+                };
+                // Africa + Europe
+                drawContinent(280, 110, 30, 55, 0.1);
+                drawContinent(270, 70, 25, 20, -0.2);
+                // Asia
+                drawContinent(340, 70, 60, 35, 0.1);
+                drawContinent(370, 110, 25, 25, 0);
+                // North America
+                drawContinent(110, 70, 40, 30, -0.2);
+                drawContinent(95, 100, 20, 15, 0.3);
+                // South America
+                drawContinent(140, 150, 18, 40, 0.15);
+                // Australia
+                drawContinent(410, 160, 22, 14, 0.1);
+                // Antarctica
+                drawContinent(256, 240, 80, 15, 0);
+                
+                // Add some noise / variation to land
+                const eid = ectx.getImageData(0, 0, 512, 256);
+                const epx = eid.data;
+                for (let i = 0; i < epx.length; i += 4) {
+                    const nr = (Math.random() - 0.5) * 20;
+                    epx[i] = Math.max(0, Math.min(255, epx[i] + nr));
+                    epx[i + 1] = Math.max(0, Math.min(255, epx[i + 1] + nr));
+                    epx[i + 2] = Math.max(0, Math.min(255, epx[i + 2] + nr));
+                }
+                ectx.putImageData(eid, 0, 0);
+                
+                // Cloud wisps (semi-transparent white ellipses)
+                ectx.globalAlpha = 0.25;
+                ectx.fillStyle = '#ffffff';
+                for (let c = 0; c < 40; c++) {
+                    const cx2 = Math.random() * 512;
+                    const cy2 = Math.random() * 256;
+                    ectx.beginPath();
+                    ectx.ellipse(cx2, cy2, 15 + Math.random() * 40, 3 + Math.random() * 8, Math.random() * Math.PI, 0, Math.PI * 2);
+                    ectx.fill();
+                }
+                ectx.globalAlpha = 1;
+                
+                const earthTexture = new THREE.CanvasTexture(earthCanvas);
+                const earthGeo = new THREE.SphereGeometry(1, 48, 32);
+                const earthMat = new THREE.MeshStandardMaterial({
+                    map: earthTexture,
+                    roughness: 0.7,
+                    metalness: 0.0,
+                    fog: false
+                });
+                const earth = new THREE.Mesh(earthGeo, earthMat);
+                earth.scale.set(earthRadius, earthRadius, earthRadius);
+                // Place Earth along +X axis from moon
+                earth.position.set(earthDistance, 0, 0);
+                
+                // Mass: 5.972e24 kg = 5.972e21 tonnes
+                earth.userData = {
+                    type: 'asteroid',
+                    selectable: true,
+                    shapeType: 1.0,
+                    name: 'Earth',
+                    rotationSpeed: { x: 0, y: 0.0002, z: 0 },
+                    mass: 5.972e21,
+                    velocity: new THREE.Vector3(0, 0, 0)
+                };
+                asteroids.push(earth);
+                scene.add(earth);
                 
                 // Ship in low orbit ~100 km above surface
                 const orbitRadius = 1837 / KM_PER_UNIT;
@@ -2290,7 +2381,7 @@
                         selectable: true,
                         shapeType: 1.0,
                         name: 'Station',
-                        rotationSpeed: { x: 0, y: 0, z: 0 },
+                        rotationSpeed: { x: 0, y: 0.001, z: 0 }, // ~1 RPM spin for artificial gravity
                         mass: 1e6, // ~1 Mt (negligible gravity)
                         velocity: new THREE.Vector3(0, 0, 0),
                         // Compound collision shapes — tori are rotated PI/2 so center
@@ -2300,7 +2391,7 @@
                         collisionShapes: [
                             { type: 'torus', R: SR, r: SRr },        // Main ring: R=25 (2.5km), r=2.5 (250m)
                             { type: 'torus', R: 12, r: 1.5 },        // Inner ring: R=12 (1.2km), r=1.5 (150m)
-                            { type: 'cylinder', radius: 5, halfHeight: 14 } // Hub + flared caps
+                            { type: 'cylinder', radius: 3.5, halfHeight: 11 } // Hub core (350m radius, 2.2km tall)
                         ],
                         // Bounding sphere for quick rejection (avoidance, proximity, etc.)
                         collisionSize: new THREE.Vector3(28, 22, 28)
@@ -2316,8 +2407,9 @@
                 WORLD_RADIUS = 25000; // 2,500 km
                 createBoundarySphere();
                 
-                // Increase near plane for this scene (distances are huge)
+                // Adjust clip planes for this scene (distances up to ~4M scene units for Earth)
                 camera.near = 1;
+                camera.far = 5000000;
                 camera.updateProjectionMatrix();
                 
                 // Camera above ship looking down at moon surface
@@ -2796,6 +2888,20 @@
             selectionRing.name = 'selectionRing';
             ship.add(selectionRing);
             
+            // === SHIELD BUBBLE (invisible until hit) ===
+            const shieldGeo = new THREE.SphereGeometry(3, 24, 16);
+            const shieldMat = new THREE.MeshBasicMaterial({
+                color: 0x00ccff,
+                transparent: true,
+                opacity: 0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+            const shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
+            shieldMesh.name = 'shield';
+            ship.add(shieldMesh);
+            
             ship.userData = { 
                 type: 'spaceship', 
                 selectable: true,
@@ -2805,8 +2911,11 @@
                 mass: SHIP_MASS,
                 weapons: WEAPON_CHARGES,
                 maxWeapons: WEAPON_CHARGES,
+                battery: WEAPON_CHARGES,
+                maxBattery: WEAPON_CHARGES,
                 hp: 100,
                 maxHp: 100,
+                shieldFlash: 0, // countdown frames for shield visual
                 velocity: new THREE.Vector3(0, 0, 0),
                 targetVelocity: new THREE.Vector3(0, 0, 0),
                 isAccelerating: false,
@@ -3867,23 +3976,32 @@
             
             const shipData = ship.userData;
             
-            // Check if ship has enough weapons energy
+            // Check if ship has enough battery to fire
             const WEAPON_COST = 8;
-            if (shipData.weapons < WEAPON_COST) {
+            if (shipData.battery < WEAPON_COST) {
                 return;
             }
             
-            shipData.weapons = Math.max(0, shipData.weapons - WEAPON_COST);
-            if (shipData.weapons <= 0 && !shipData.weaponsDepleted && shipData.team !== 'enemy') {
+            shipData.battery = Math.max(0, shipData.battery - WEAPON_COST);
+            if (shipData.battery <= 0 && !shipData.weaponsDepleted && shipData.team !== 'enemy') {
                 shipData.weaponsDepleted = true;
-                showToast(`${shipData.name} — WEAPONS DEPLETED`, 'danger');
+                showToast(`${shipData.name} — BATTERY DEPLETED`, 'danger');
             }
             
-            // Damage calculation
+            // Damage calculation — battery (shields) absorbs first, then hull
             if (target.userData && target.userData.type === 'spaceship') {
-                target.userData.hp -= 20; // Takes 5 shots to kill
+                const LASER_DAMAGE = 20;
+                const td = target.userData;
+                if (td.battery > 0) {
+                    // Shield absorbs the hit
+                    td.battery = Math.max(0, td.battery - LASER_DAMAGE);
+                    td.shieldFlash = 12; // show shield for 12 frames (~0.2s)
+                } else {
+                    // Battery depleted — hull takes damage
+                    td.hp -= LASER_DAMAGE; // Takes 5 unshielded shots to kill
+                }
                 
-                if (target.userData.hp <= 0) {
+                if (td.hp <= 0) {
                     // Destroy ship
                     createShipExplosion(target.position);
                     
@@ -3979,12 +4097,24 @@
                 const isSelected = index === selectedShipIndex;
                 const hasFuel = data.fuel > 0;
                 
-                // Slowly regenerate weapons
-                if (data.weapons < data.maxWeapons) {
-                    data.weapons = Math.min(data.maxWeapons, data.weapons + 0.1);
-                    if (data.weapons > 8 && data.weaponsDepleted) {
+                // Slowly regenerate battery (shields + weapons)
+                if (data.battery < data.maxBattery) {
+                    data.battery = Math.min(data.maxBattery, data.battery + 0.15);
+                    if (data.battery > 8 && data.weaponsDepleted) {
                         data.weaponsDepleted = false; // Recovered enough to shoot
                     }
+                }
+                
+                // Decay shield flash
+                if (data.shieldFlash > 0) data.shieldFlash--;
+                
+                // Update shield bubble visual
+                const shieldChild = ship.getObjectByName('shield');
+                if (shieldChild) {
+                    shieldChild.material.opacity = data.shieldFlash > 0
+                        ? (data.shieldFlash / 12) * 0.6
+                        : 0;
+                    shieldChild.visible = data.shieldFlash > 0;
                 }
                 
                 // ── LANDED: stay attached to asteroid surface, skip all physics ──
@@ -4519,7 +4649,7 @@
                         `<span style="color:#ff8800">${burnRate}t/s</span>` : 
                         `<span style="color:#555;">IDLE</span>`;
                     
-                    const wpnPct = Math.round(obj.userData.weapons / obj.userData.maxWeapons * 100);
+                    const wpnPct = Math.round(obj.userData.battery / obj.userData.maxBattery * 100);
                     const speedRaw = obj.userData.velocity.length() * KM_PER_UNIT * 60;  // km/s (assuming 60fps)
                     const speedStr = speedRaw < 1 ? `${Math.round(speedRaw * 1000)}m/s` : `${Math.round(speedRaw)}km/s`;
                     const behaviorType = obj.userData.behavior ? obj.userData.behavior.type : null;
@@ -4558,8 +4688,8 @@
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
-                            <span style="color:#aaa;">WEAPONS</span>
-                            <span style="color:${wpnPct > 20 ? '#ffaa00' : '#ff0000'}">${wpnPct}%</span>
+                            <span style="color:#aaa;">BATTERY</span>
+                            <span style="color:${wpnPct > 20 ? '#00ccff' : '#ff0000'}">${wpnPct}%</span>
                         </div>
                         
                         <div style="display: flex; justify-content: space-between;">
@@ -4988,6 +5118,7 @@
             if (keys.space) {
                 // Polar look rotation — W/S pitch, A/D yaw, using cameraUpVector (no worldY, no pole lock)
                 isCameraTransitioning = false;
+                cameraFollowTarget = null; // Release object lock when looking around
                 if (keys.w || keys.a || keys.s || keys.d) {
                     cameraMoveHeldFrames++;
                 } else {
