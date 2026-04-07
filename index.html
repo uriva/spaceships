@@ -2272,11 +2272,11 @@
             });
             spaceships.length = 0;
             
-            // Remove asteroids
+            // Remove asteroids (some are Groups without geometry/material)
             asteroids.forEach(a => {
                 scene.remove(a);
-                a.geometry.dispose();
-                a.material.dispose();
+                if (a.geometry) a.geometry.dispose();
+                if (a.material) a.material.dispose();
             });
             asteroids.length = 0;
             
@@ -2292,8 +2292,8 @@
             // Remove dust particles
             dustParticles.forEach(p => {
                 scene.remove(p);
-                p.geometry.dispose();
-                p.material.dispose();
+                if (p.geometry) p.geometry.dispose();
+                if (p.material) p.material.dispose();
             });
             dustParticles.length = 0;
             
