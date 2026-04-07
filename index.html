@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Void Command - 3D Space Strategy</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23080818'/%3E%3Cpolygon points='32,8 22,44 32,38 42,44' fill='%2300ccff' opacity='0.9'/%3E%3Cpolygon points='32,38 22,44 18,48 32,44 46,48 42,44' fill='%230088bb' opacity='0.7'/%3E%3Ccircle cx='32' cy='28' r='2' fill='%23fff' opacity='0.9'/%3E%3Ccircle cx='14' cy='14' r='1' fill='%23fff' opacity='0.4'/%3E%3Ccircle cx='50' cy='10' r='1' fill='%23fff' opacity='0.3'/%3E%3Ccircle cx='52' cy='50' r='1' fill='%23fff' opacity='0.5'/%3E%3Ccircle cx='10' cy='54' r='1' fill='%23fff' opacity='0.3'/%3E%3C/svg%3E">
     <style>
@@ -29,6 +29,7 @@
             left: 0;
             width: 100vw;
             height: 100vh;
+            touch-action: none;
         }
         
         /* CRT Monitor Effect */
@@ -419,6 +420,20 @@
             flex-direction: column;
             font-family: 'Share Tech Mono', monospace;
             user-select: text; /* Allow text selection */
+            touch-action: auto; /* Allow scroll/input in chat on mobile */
+        }
+        
+        @media (max-width: 768px) {
+            .chat-panel {
+                left: 5px;
+                right: 5px;
+                bottom: 5px;
+                width: auto;
+                max-height: 200px;
+            }
+            .hud-panel {
+                display: none;
+            }
         }
         
         .chat-header {
@@ -1584,6 +1599,83 @@
             renderer.domElement.addEventListener('mouseup', onMouseUp, false);
             renderer.domElement.addEventListener('wheel', onWheel, false);
             renderer.domElement.addEventListener('contextmenu', onRightClick, false);
+            
+            // ── Touch controls: 1-finger drag = orbit, pinch = zoom ──
+            let _touchPrev = null;   // { x, y } for single-finger orbit
+            let _pinchPrev = null;   // distance between two fingers
+            
+            renderer.domElement.addEventListener('touchstart', (e) => {
+                if (e.target.closest('.chat-panel')) return; // don't hijack chat
+                e.preventDefault();
+                if (e.touches.length === 1) {
+                    _touchPrev = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                    _pinchPrev = null;
+                } else if (e.touches.length === 2) {
+                    _touchPrev = null;
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    _pinchPrev = Math.sqrt(dx * dx + dy * dy);
+                }
+            }, { passive: false });
+            
+            renderer.domElement.addEventListener('touchmove', (e) => {
+                if (e.target.closest('.chat-panel')) return;
+                e.preventDefault();
+                
+                if (e.touches.length === 1 && _touchPrev) {
+                    // Single finger drag = orbit (yaw + pitch)
+                    const x = e.touches[0].clientX, y = e.touches[0].clientY;
+                    const dx = x - _touchPrev.x;
+                    const dy = y - _touchPrev.y;
+                    _touchPrev = { x, y };
+                    
+                    isCameraTransitioning = false;
+                    const sensitivity = 0.004;
+                    
+                    // Yaw: rotate camSphereDir around camSphereUp
+                    if (Math.abs(dx) > 0.5) {
+                        camSphereDir.applyAxisAngle(camSphereUp, -dx * sensitivity).normalize();
+                    }
+                    // Pitch: rotate camSphereDir and camSphereUp around right axis
+                    if (Math.abs(dy) > 0.5) {
+                        const right = new THREE.Vector3().crossVectors(camSphereDir, camSphereUp).normalize();
+                        camSphereDir.applyAxisAngle(right, dy * sensitivity).normalize();
+                        camSphereUp.applyAxisAngle(right, dy * sensitivity).normalize();
+                    }
+                    
+                    cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                    cameraTarget.copy(camOrbitCenter);
+                    cameraUpVector.copy(camSphereUp);
+                    updateCameraPosition();
+                    
+                } else if (e.touches.length === 2 && _pinchPrev !== null) {
+                    // Pinch = zoom
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const delta = _pinchPrev - dist;
+                    _pinchPrev = dist;
+                    
+                    isCameraTransitioning = false;
+                    camSphereRadius *= 1 + delta * 0.005;
+                    camSphereRadius = Math.max(1, camSphereRadius);
+                    
+                    cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                    cameraTarget.copy(camOrbitCenter);
+                    cameraUpVector.copy(camSphereUp);
+                    updateCameraPosition();
+                }
+            }, { passive: false });
+            
+            renderer.domElement.addEventListener('touchend', (e) => {
+                if (e.touches.length === 0) {
+                    _touchPrev = null;
+                    _pinchPrev = null;
+                } else if (e.touches.length === 1) {
+                    _touchPrev = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                    _pinchPrev = null;
+                }
+            }, { passive: false });
             window.addEventListener('keydown', onKeyDown, true);
             window.addEventListener('keyup', onKeyUp, true);
             
@@ -7488,12 +7580,23 @@
             const simAsteroids = getSimCoreAsteroids();
             
             // Run NN for each neural ship
+            if (!window._nnDiagFrames) window._nnDiagFrames = 0;
+            window._nnDiagFrames++;
             for (let ni = 0; ni < nNeural; ni++) {
                 const ship = _neuralBuf[ni];
                 const sim = ship.userData.sim;
                 const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
                 const outputs = ship.userData.neuralBrain.forward(inputs);
                 const { firedAt } = SimCore.applyNNOutputs(sim, outputs, _allSimBuf);
+                // --- DIAGNOSTIC: log NN outputs for first 5 frames, first 2 ships ---
+                if (window._nnDiagFrames <= 5 && ni < 2) {
+                    const o = Array.from(outputs).map(v => v.toFixed(3));
+                    const spd = Math.sqrt(sim.vel[0]**2+sim.vel[1]**2+sim.vel[2]**2);
+                    console.log(`[NN DIAG] frame=${window._nnDiagFrames} ship=${ship.name} team=${sim.team} outputs=[torX=${o[0]} torY=${o[1]} torZ=${o[2]} burn=${o[3]} tgtSel=${o[4]} fire=${o[5]}] speed=${spd.toFixed(3)} hp=${sim.hp} fuel=${sim.fuel.toFixed(1)} bat=${sim.battery.toFixed(1)} nSim=${nSim} nEnemies=${_allSimBuf.filter(s=>s!==sim&&s.alive&&s.team!==sim.team).length}`);
+                    if (window._nnDiagFrames === 1 && ni === 0) {
+                        console.log(`[NN DIAG] inputs sample: own=[${inputs.slice(0,10).map(v=>v.toFixed(3))}] ship0=[${inputs.slice(10,19).map(v=>v.toFixed(3))}] ship1=[${inputs.slice(19,28).map(v=>v.toFixed(3))}] ast0=[${inputs.slice(64,68).map(v=>v.toFixed(3))}]`);
+                    }
+                }
                 
                 // Visual laser beam (no .find() — linear scan reusing nothing)
                 if (firedAt) {
