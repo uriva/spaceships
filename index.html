@@ -868,7 +868,7 @@
                 
                 const separation = 50; // 5 km between fleet centers
                 const fleetSize = 5;
-                const spacingX = 12;
+                const spread = 30; // random spread within team zone (3 km)
                 
                 const teams = [
                     { team: 'player', color: 0x44aaff, prefix: 'NA', zSign: +1, brain: this.alphaBrain },
@@ -878,9 +878,9 @@
                 teams.forEach(t => {
                     const centerZ = t.zSign * separation;
                     for (let i = 0; i < fleetSize; i++) {
-                        const x = (i - (fleetSize - 1) / 2) * spacingX;
-                        const y = 0;
-                        const z = centerZ;
+                        const x = (Math.random() - 0.5) * spread;
+                        const y = (Math.random() - 0.5) * spread;
+                        const z = centerZ + (Math.random() - 0.5) * spread;
                         
                         const config = {
                             x, y, z,
@@ -890,7 +890,11 @@
                         };
                         const ship = createSingleSpaceship(config, spaceships.length);
                         ship.position.set(x, y, z);
-                        ship.lookAt(x, y, -t.zSign * separation);
+                        // Random orientation
+                        ship.quaternion.set(
+                            Math.random() - 0.5, Math.random() - 0.5,
+                            Math.random() - 0.5, Math.random() - 0.5
+                        ).normalize();
                         
                         // Tag as neural-controlled
                         ship.userData.neuralBrain = t.brain;
