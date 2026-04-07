@@ -633,6 +633,7 @@
         <div id="neuro-matchup" style="color:#aaa">α#0 vs ω#0</div>
         <div id="neuro-best" style="margin-top:4px; color:#ffcc00">BEST: 0</div>
         <div id="neuro-avg" style="color:#88aacc">AVG: 0</div>
+        <div id="neuro-mode" style="margin-top:4px; color:#00ffcc">MODE: VISUAL [H]</div>
     </div>
     
     <div id="selection-indicators"></div>
@@ -778,6 +779,7 @@
         // --- NEURO module: population, matches, evolution ---
         const NEURO = {
             active: false,
+            headless: false,
             TOPOLOGY: [62, 16, 16, 6],  // inputs, hidden×2, outputs
             POP_SIZE: 20,
             MATCHES_PER_GEN: 10,
@@ -1210,6 +1212,8 @@
                     if (p.fights > 0) { avgF += p.fitness; counted++; }
                 }
                 document.getElementById('neuro-avg').textContent = `AVG: ${counted > 0 ? (avgF / counted).toFixed(1) : '—'}`;
+                document.getElementById('neuro-mode').textContent = this.headless ? 'MODE: HEADLESS [H]' : 'MODE: VISUAL [H]';
+                document.getElementById('neuro-mode').style.color = this.headless ? '#ff8800' : '#00ffcc';
             },
         };
         
@@ -2257,6 +2261,7 @@
         
         function loadScene(sceneName) {
             NEURO.active = false;
+            NEURO.headless = false;
             clearGameObjects();
             currentScene = sceneName;
             
@@ -4317,6 +4322,11 @@
                 document.getElementById('time-speed-label').textContent = timeSpeed === 0 ? 'TIME: PAUSED' : `TIME: ${timeSpeed}x`;
             }
             
+            // H to toggle headless neuro training
+            if ((key === 'h' || code === 'KeyH') && NEURO.active) {
+                NEURO.headless = !NEURO.headless;
+            }
+            
             // TAB to cycle through ships, SHIFT+TAB to cycle back
             // (no mode change — just selection)
             if (code === 'Tab') {
@@ -4934,9 +4944,9 @@
                 
                 if (td.hp <= 0) {
                     // Destroy ship
-                    createShipExplosion(target.position);
+                    if (!NEURO.headless) createShipExplosion(target.position);
                     
-                    if (target.userData.name) {
+                    if (target.userData.name && !NEURO.headless) {
                         if (target.userData.team === 'enemy') {
                             showToast(`ENEMY DESTROYED: ${target.userData.name}`, 'success');
                         } else {
@@ -4961,6 +4971,9 @@
                     }
                 }
             }
+            
+            // Headless mode: skip beam visuals entirely
+            if (NEURO.headless) return;
             
             const startPos = ship.position.clone();
             // Pick the active turret and get its lens world position
@@ -6682,6 +6695,40 @@
             updateKeyboardControls();
             
             // Simulation steps governed by timeSpeed
+            if (NEURO.active && NEURO.headless) {
+                // Headless training: tight loop, no rendering, ~50ms budget per frame
+                const t0 = performance.now();
+                while (NEURO.active && performance.now() - t0 < 50) {
+                    NEURO.update(); // NN forward pass + apply outputs + match lifecycle
+                    // Minimal physics for neural ships only (no asteroids in neuro scene)
+                    for (const ship of spaceships) {
+                        const d = ship.userData;
+                        // Angular velocity → quaternion
+                        const aLen = d.angularVelocity.length();
+                        if (aLen > 1e-6) {
+                            const dq = new THREE.Quaternion().setFromAxisAngle(
+                                d.angularVelocity.clone().normalize(), aLen);
+                            ship.quaternion.premultiply(dq);
+                            ship.quaternion.normalize();
+                        }
+                        // Position integration
+                        ship.position.add(d.velocity);
+                        // Battery recharge
+                        if (d.battery < d.maxBattery) {
+                            d.battery = Math.min(d.maxBattery, d.battery + 0.02);
+                            if (d.battery > 8 && d.weaponsDepleted) d.weaponsDepleted = false;
+                        }
+                        // Shield flash decay
+                        if (d.shieldFlash > 0) d.shieldFlash--;
+                    }
+                }
+                NEURO.updateHUD();
+                // Render one frame so scene stays visible (just stars + ships, no beams)
+                renderer.clear();
+                renderer.render(starScene, camera);
+                renderer.clearDepth();
+                renderer.render(scene, camera);
+            } else {
             simAccumulator += timeSpeed;
             const maxSteps = 8; // cap to prevent freeze at high speeds
             let steps = 0;
@@ -6712,6 +6759,7 @@
             // Update 2D indicator AFTER render so camera matrix is final
             camera.updateMatrixWorld();
             updateSelectionIndicator();
+            }
         }
         
         // Initialize
