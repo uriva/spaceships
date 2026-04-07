@@ -1103,24 +1103,34 @@
             // Score the match and start next
             endMatch(alphaAlive, omegaAlive) {
                 // Compute scores for each team
-                const scoreTeam = (alive, popIdx, brain) => {
+                const scoreTeam = (alive, popIdx, brain, enemies) => {
                     let score = 0;
-                    // Survival bonus: 100 per surviving ship
-                    score += alive.length * 100;
-                    // HP remaining
-                    for (const s of alive) score += (s.userData.hp / s.userData.maxHp) * 50;
-                    // Damage dealt/taken across ALL ships that had this brain
+                    // Damage dealt is king — this is what we want to evolve
                     for (const s of this.matchShips) {
                         if (s.userData.neuralTeamIdx === popIdx) {
-                            score += s.userData.neuralDamageDealt * 2;
-                            score -= s.userData.neuralDamageTaken;
+                            score += s.userData.neuralDamageDealt * 3;
+                            score -= s.userData.neuralDamageTaken * 0.5;
                         }
+                    }
+                    // Kills: bonus per enemy destroyed
+                    score += (5 - enemies.length) * 150;
+                    // Proximity reward: penalize distance to enemies at match end
+                    if (alive.length > 0 && enemies.length > 0) {
+                        let totalDist = 0;
+                        for (const s of alive) {
+                            let minDist = Infinity;
+                            for (const e of enemies) minDist = Math.min(minDist, s.position.distanceTo(e.position));
+                            totalDist += minDist;
+                        }
+                        const avgDist = totalDist / alive.length;
+                        // Penalize: 0 penalty at dist=0, -200 at dist=200+ (20km+)
+                        score -= Math.min(avgDist, 200);
                     }
                     return score;
                 };
                 
-                const alphaScore = scoreTeam(alphaAlive, this.alphaIdx, this.alphaBrain);
-                const omegaScore = scoreTeam(omegaAlive, this.omegaIdx, this.omegaBrain);
+                const alphaScore = scoreTeam(alphaAlive, this.alphaIdx, this.alphaBrain, omegaAlive);
+                const omegaScore = scoreTeam(omegaAlive, this.omegaIdx, this.omegaBrain, alphaAlive);
                 
                 // Running average fitness
                 const updateFitness = (idx, score) => {
