@@ -657,6 +657,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="sim-core.js"></script>
     <script>
         // Game State
         let scene, starScene, camera, renderer;
@@ -713,68 +714,12 @@
         const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
         
         // ══════════════════════════════════════════════════════════════
-        // ██  NEUROEVOLUTION — NEAT-lite ship AI training
-        // ══════════════════════════════════════════════════════════════
+         // ██  NEUROEVOLUTION — NEAT-lite ship AI training
+         // ══════════════════════════════════════════════════════════════
         
-        // --- NeuralNetwork: fixed topology, fast forward pass ---
-        class NeuralNetwork {
-            // layers: array of layer sizes, e.g. [62, 16, 16, 6]
-            constructor(layers) {
-                this.layers = layers;
-                this.weights = []; // weights[i] = Float64Array for layer i→i+1
-                this.biases = [];  // biases[i]  = Float64Array for layer i+1
-                for (let i = 0; i < layers.length - 1; i++) {
-                    this.weights.push(new Float64Array(layers[i] * layers[i + 1]));
-                    this.biases.push(new Float64Array(layers[i + 1]));
-                }
-            }
-            // Total number of parameters (weights + biases)
-            get paramCount() {
-                let n = 0;
-                for (let i = 0; i < this.layers.length - 1; i++) {
-                    n += this.layers[i] * this.layers[i + 1] + this.layers[i + 1];
-                }
-                return n;
-            }
-            // Load flat genome array into weights/biases
-            fromGenome(genome) {
-                let idx = 0;
-                for (let i = 0; i < this.layers.length - 1; i++) {
-                    const nW = this.layers[i] * this.layers[i + 1];
-                    for (let j = 0; j < nW; j++) this.weights[i][j] = genome[idx++];
-                    const nB = this.layers[i + 1];
-                    for (let j = 0; j < nB; j++) this.biases[i][j] = genome[idx++];
-                }
-            }
-            // Export weights/biases back to flat array
-            toGenome() {
-                const g = new Float64Array(this.paramCount);
-                let idx = 0;
-                for (let i = 0; i < this.layers.length - 1; i++) {
-                    for (let j = 0; j < this.weights[i].length; j++) g[idx++] = this.weights[i][j];
-                    for (let j = 0; j < this.biases[i].length; j++) g[idx++] = this.biases[i][j];
-                }
-                return g;
-            }
-            // Forward pass: tanh hidden layers, tanh output
-            forward(inputs) {
-                let activation = Float64Array.from(inputs);
-                for (let i = 0; i < this.layers.length - 1; i++) {
-                    const nIn = this.layers[i];
-                    const nOut = this.layers[i + 1];
-                    const next = new Float64Array(nOut);
-                    for (let o = 0; o < nOut; o++) {
-                        let sum = this.biases[i][o];
-                        for (let j = 0; j < nIn; j++) {
-                            sum += activation[j] * this.weights[i][o * nIn + j];
-                        }
-                        next[o] = Math.tanh(sum);
-                    }
-                    activation = next;
-                }
-                return activation;
-            }
-        }
+         // NeuralNetwork class provided by sim-core.js (SimCore.NeuralNetwork)
+         const NeuralNetwork = SimCore.NeuralNetwork;
+        
         
         // --- NEURO module: population, matches, evolution ---
         const NEURO = {
@@ -801,23 +746,7 @@
             
             // Initialize population with random genomes
             init() {
-                const nn = new NeuralNetwork(this.TOPOLOGY);
-                const nParams = nn.paramCount;
-                this.population = [];
-                for (let i = 0; i < this.POP_SIZE; i++) {
-                    const genome = new Float64Array(nParams);
-                    // Xavier-ish init: scale by 1/sqrt(fan_in)
-                    let idx = 0;
-                    for (let li = 0; li < this.TOPOLOGY.length - 1; li++) {
-                        const fanIn = this.TOPOLOGY[li];
-                        const scale = 1 / Math.sqrt(fanIn);
-                        const nW = this.TOPOLOGY[li] * this.TOPOLOGY[li + 1];
-                        for (let j = 0; j < nW; j++) genome[idx++] = (Math.random() * 2 - 1) * scale;
-                        const nB = this.TOPOLOGY[li + 1];
-                        for (let j = 0; j < nB; j++) genome[idx++] = 0; // biases start at 0
-                    }
-                    this.population.push({ genome, fitness: 0, fights: 0 });
-                }
+                this.population = SimCore.initPopulation(this.POP_SIZE, this.TOPOLOGY);
                 this.generation = 0;
                 this.matchIndex = 0;
                 this.bestFitness = -Infinity;
@@ -903,6 +832,10 @@
                         ship.userData.neuralDamageTaken = 0;
                         ship.userData.neuralSurvived = true;
                         
+                        // SimCore plain state for shared sim logic
+                        const simTeam = t === teams[0] ? 'alpha' : 'omega';
+                        ship.userData.sim = SimCore.createShipState(simTeam);
+                        
                         // Trail
                         const TRAIL_LENGTH = 60;
                         const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
@@ -945,136 +878,43 @@
                 });
             },
             
-            // Build the 62-element input vector for a ship
-            buildInputs(ship) {
-                const data = ship.userData;
-                const brain = data.neuralBrain;
-                const inputs = new Float64Array(62);
-                
-                // Own state (8 inputs)
-                const angV = data.angularVelocity;
-                inputs[0] = angV.x;
-                inputs[1] = angV.y;
-                inputs[2] = angV.z;
-                
-                const speed = data.velocity.length();
-                inputs[3] = speed / MAX_SPEED; // normalized 0..1
-                
-                // forward · velocity (how aligned we are with movement)
-                const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
-                inputs[4] = speed > 1e-4 ? fwd.dot(data.velocity.clone().normalize()) : 0;
-                
-                inputs[5] = data.battery / data.maxBattery;
-                inputs[6] = data.hp / data.maxHp;
-                inputs[7] = data.fuel / data.maxFuel;
-                
-                // Nearest 6 visible ships (9 each = 54 inputs)
-                // Sort all other ships by distance
-                const invQuat = ship.quaternion.clone().invert();
-                const others = [];
-                for (const other of this.matchShips) {
-                    if (other === ship || !other.parent) continue;
-                    const relPos = other.position.clone().sub(ship.position);
-                    const dist = relPos.length();
-                    others.push({ ship: other, dist, relPos });
-                }
-                others.sort((a, b) => a.dist - b.dist);
-                
-                for (let i = 0; i < 6; i++) {
-                    const base = 8 + i * 9;
-                    if (i < others.length) {
-                        const o = others[i];
-                        // Relative position in ship's local frame
-                        const localPos = o.relPos.clone().applyQuaternion(invQuat);
-                        // Normalize by a reasonable range (500 units ~ 50km)
-                        inputs[base + 0] = localPos.x / 500;
-                        inputs[base + 1] = localPos.y / 500;
-                        inputs[base + 2] = localPos.z / 500;
-                        // Relative velocity in local frame
-                        const relVel = o.ship.userData.velocity.clone().sub(data.velocity);
-                        const localVel = relVel.applyQuaternion(invQuat);
-                        inputs[base + 3] = localVel.x / MAX_SPEED;
-                        inputs[base + 4] = localVel.y / MAX_SPEED;
-                        inputs[base + 5] = localVel.z / MAX_SPEED;
-                        // Same team?
-                        inputs[base + 6] = o.ship.userData.team === data.team ? 1 : -1;
-                        inputs[base + 7] = o.ship.userData.hp / o.ship.userData.maxHp;
-                        inputs[base + 8] = o.ship.userData.battery / o.ship.userData.maxBattery;
-                    }
-                    // else: stays 0 (no ship in this slot)
-                }
-                
-                return inputs;
+            // Sync Three.js ship → SimCore plain state
+            syncToSim(ship) {
+                const d = ship.userData;
+                const s = d.sim;
+                s.pos[0] = ship.position.x; s.pos[1] = ship.position.y; s.pos[2] = ship.position.z;
+                s.vel[0] = d.velocity.x; s.vel[1] = d.velocity.y; s.vel[2] = d.velocity.z;
+                s.quat[0] = ship.quaternion.x; s.quat[1] = ship.quaternion.y;
+                s.quat[2] = ship.quaternion.z; s.quat[3] = ship.quaternion.w;
+                s.angVel[0] = d.angularVelocity.x; s.angVel[1] = d.angularVelocity.y; s.angVel[2] = d.angularVelocity.z;
+                s.hp = d.hp; s.battery = d.battery; s.fuel = d.fuel;
+                s.alive = !!ship.parent;
+                s.neuralDamageDealt = d.neuralDamageDealt;
+                s.neuralDamageTaken = d.neuralDamageTaken;
             },
             
-            // Apply NN outputs to a ship
-            applyOutputs(ship, outputs) {
-                const data = ship.userData;
-                const hasFuel = data.fuel > 0;
-                
-                // outputs[0..2]: body torque (xyz)
-                // outputs[3]: engineBurn (>0 forward, <0 brake)
-                // outputs[4]: targetSelect (which enemy to aim turrets at)
-                // outputs[5]: fire (>0 = fire)
-                
-                // Apply torque directly to angular velocity
-                if (hasFuel) {
-                    const torqueScale = TORQUE;
-                    data.angularVelocity.x += outputs[0] * torqueScale;
-                    data.angularVelocity.y += outputs[1] * torqueScale;
-                    data.angularVelocity.z += outputs[2] * torqueScale;
-                    // Cap angular velocity magnitude
-                    const maxAngSpeed = 0.1; // rad/frame
-                    const angSpeed = data.angularVelocity.length();
-                    if (angSpeed > maxAngSpeed) {
-                        data.angularVelocity.multiplyScalar(maxAngSpeed / angSpeed);
-                    }
-                    data.fuel = Math.max(0, data.fuel - TORQUE_FUEL_COST);
-                }
-                
-                // Engine burn along forward axis
-                const burn = outputs[3]; // -1..+1
-                if (Math.abs(burn) > 0.1 && hasFuel) {
-                    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
-                    data.velocity.add(fwd.multiplyScalar(burn * THRUST));
-                    if (data.velocity.length() > MAX_SPEED) {
-                        data.velocity.normalize().multiplyScalar(MAX_SPEED);
-                    }
-                    data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME * Math.abs(burn));
-                    data.isAccelerating = burn > 0;
-                    data.isBraking = burn < 0;
-                } else {
-                    data.isAccelerating = false;
-                    data.isBraking = false;
-                }
-                
-                // Target selection: pick enemy to aim turrets at
-                const enemies = this.matchShips.filter(s =>
-                    s !== ship && s.parent && s.userData.team !== data.team
-                ).sort((a, b) =>
-                    ship.position.distanceTo(a.position) - ship.position.distanceTo(b.position)
-                );
-                if (enemies.length > 0) {
-                    // Map tanh output [-1,1] to enemy index
-                    const idx = Math.min(
-                        Math.floor((outputs[4] + 1) / 2 * enemies.length),
-                        enemies.length - 1
-                    );
-                    const target = enemies[Math.max(0, idx)];
-                    
-                    // Set as attack target for turret tracking
-                    if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
-                        data.behavior = { type: 'attack', target };
-                    }
-                    
-                    // Fire if output > 0 and we have battery
-                    if (outputs[5] > 0 && data.battery >= 8) {
-                        const dist = ship.position.distanceTo(target.position);
-                        if (dist < 200) { // within weapon range (~20km)
-                            fireLaser(ship, target);
-                        }
-                    }
-                }
+            // Sync SimCore plain state → Three.js ship
+            syncFromSim(ship) {
+                const d = ship.userData;
+                const s = d.sim;
+                ship.position.set(s.pos[0], s.pos[1], s.pos[2]);
+                d.velocity.set(s.vel[0], s.vel[1], s.vel[2]);
+                ship.quaternion.set(s.quat[0], s.quat[1], s.quat[2], s.quat[3]);
+                d.angularVelocity.set(s.angVel[0], s.angVel[1], s.angVel[2]);
+                d.hp = s.hp; d.battery = s.battery; d.fuel = s.fuel;
+                d.neuralDamageDealt = s.neuralDamageDealt;
+                d.neuralDamageTaken = s.neuralDamageTaken;
+                d.isAccelerating = s.isAccelerating;
+                d.isBraking = s.isBraking;
+                d.shieldFlash = s.shieldFlash;
+                d.weaponsDepleted = s.weaponsDepleted;
+            },
+            
+            // Build the 62-element input vector for a ship (delegates to SimCore)
+            buildInputs(ship) {
+                this.syncToSim(ship);
+                const simShips = this.matchShips.map(ms => ms.userData.sim);
+                return SimCore.buildNNInputs(ship.userData.sim, simShips);
             },
             
             // Called each sim frame from the animate loop
@@ -1082,12 +922,68 @@
                 if (!this.active) return;
                 this.matchFrame++;
                 
+                // Batch sync: Three.js → SimCore for all living ships
+                for (const ms of this.matchShips) {
+                    if (ms.parent) this.syncToSim(ms);
+                }
+                const simShips = this.matchShips.map(ms => ms.userData.sim);
+                
                 // Run NN for each living neural ship
                 for (const ship of this.matchShips) {
                     if (!ship.parent) continue; // destroyed
-                    const inputs = this.buildInputs(ship);
+                    const sim = ship.userData.sim;
+                    const inputs = SimCore.buildNNInputs(sim, simShips);
                     const outputs = ship.userData.neuralBrain.forward(inputs);
-                    this.applyOutputs(ship, outputs);
+                    const { firedAt } = SimCore.applyNNOutputs(sim, outputs, simShips);
+                    
+                    // Visual beam (if not headless)
+                    if (firedAt && !this.headless) {
+                        const targetThree = this.matchShips.find(ms => ms.userData.sim === firedAt);
+                        if (targetThree) {
+                            // Sync shooter position back first so beam starts from right place
+                            this.syncFromSim(ship);
+                            fireLaserVisualOnly(ship, targetThree);
+                        }
+                    }
+                    
+                    // Turret aiming (visual)
+                    const data = ship.userData;
+                    const enemies = this.matchShips.filter(s =>
+                        s !== ship && s.parent && s.userData.team !== data.team
+                    ).sort((a, b) =>
+                        ship.position.distanceTo(a.position) - ship.position.distanceTo(b.position)
+                    );
+                    if (enemies.length > 0) {
+                        const idx = Math.min(
+                            Math.floor((outputs[4] + 1) / 2 * enemies.length),
+                            enemies.length - 1
+                        );
+                        const target = enemies[Math.max(0, idx)];
+                        if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
+                            data.behavior = { type: 'attack', target };
+                        }
+                    }
+                }
+                
+                // Batch sync: SimCore → Three.js + handle kills
+                for (const ms of this.matchShips) {
+                    const msSim = ms.userData.sim;
+                    if (!msSim.alive && ms.parent) {
+                        ms.userData.neuralSurvived = false;
+                        if (!this.headless) createShipExplosion(ms.position);
+                        scene.remove(ms);
+                        if (ms.userData.trail && ms.userData.trail.line) {
+                            scene.remove(ms.userData.trail.line);
+                        }
+                        const idx = spaceships.indexOf(ms);
+                        if (idx >= 0) spaceships.splice(idx, 1);
+                        removeFromSelection(ms);
+                        if (ms === selectedObject) {
+                            selectedObject = null;
+                            if (spaceships.length > 0) selectShip(0);
+                        }
+                    }
+                    if (ms.parent) this.syncFromSim(ms);
                 }
                 
                 // Check match end conditions
@@ -1102,35 +998,14 @@
             
             // Score the match and start next
             endMatch(alphaAlive, omegaAlive) {
-                // Compute scores for each team
-                const scoreTeam = (alive, popIdx, brain, enemies) => {
-                    let score = 0;
-                    // Damage dealt is king — this is what we want to evolve
-                    for (const s of this.matchShips) {
-                        if (s.userData.neuralTeamIdx === popIdx) {
-                            score += s.userData.neuralDamageDealt * 3;
-                            score -= s.userData.neuralDamageTaken * 0.5;
-                        }
-                    }
-                    // Kills: bonus per enemy destroyed
-                    score += (5 - enemies.length) * 150;
-                    // Proximity reward: penalize distance to enemies at match end
-                    if (alive.length > 0 && enemies.length > 0) {
-                        let totalDist = 0;
-                        for (const s of alive) {
-                            let minDist = Infinity;
-                            for (const e of enemies) minDist = Math.min(minDist, s.position.distanceTo(e.position));
-                            totalDist += minDist;
-                        }
-                        const avgDist = totalDist / alive.length;
-                        // Penalize: 0 penalty at dist=0, -200 at dist=200+ (20km+)
-                        score -= Math.min(avgDist, 200);
-                    }
-                    return score;
-                };
+                // Sync all ships to sim state for scoring
+                for (const ms of this.matchShips) this.syncToSim(ms);
+                const simShips = this.matchShips.map(ms => ms.userData.sim);
+                const scores = SimCore.scoreMatch(simShips);
                 
-                const alphaScore = scoreTeam(alphaAlive, this.alphaIdx, this.alphaBrain, omegaAlive);
-                const omegaScore = scoreTeam(omegaAlive, this.omegaIdx, this.omegaBrain, alphaAlive);
+                // Map 'player' team → alpha score, 'enemy' team → omega score
+                const alphaScore = scores.alpha;
+                const omegaScore = scores.omega;
                 
                 // Running average fitness
                 const updateFitness = (idx, score) => {
@@ -1160,53 +1035,13 @@
                 this.startMatch();
             },
             
-            // Evolutionary step: selection, crossover, mutation
+            // Evolutionary step (delegates to SimCore)
             evolve() {
-                // Sort by fitness descending
-                const sorted = [...this.population].sort((a, b) => b.fitness - a.fitness);
-                
-                // Keep top half as parents
-                const parents = sorted.slice(0, Math.floor(this.POP_SIZE / 2));
-                
-                // Fill population: top half survives, bottom half replaced by offspring
-                const newPop = [];
-                
-                // Elitism: top 2 survive unchanged
-                for (let i = 0; i < 2; i++) {
-                    newPop.push({
-                        genome: new Float64Array(parents[i].genome),
-                        fitness: 0, fights: 0
-                    });
-                }
-                
-                // Fill rest with crossover + mutation
-                while (newPop.length < this.POP_SIZE) {
-                    const p1 = parents[Math.floor(Math.random() * parents.length)];
-                    const p2 = parents[Math.floor(Math.random() * parents.length)];
-                    const child = this.crossover(p1.genome, p2.genome);
-                    this.mutate(child);
-                    newPop.push({ genome: child, fitness: 0, fights: 0 });
-                }
-                
-                this.population = newPop;
-            },
-            
-            // Uniform crossover
-            crossover(g1, g2) {
-                const child = new Float64Array(g1.length);
-                for (let i = 0; i < child.length; i++) {
-                    child[i] = Math.random() < 0.5 ? g1[i] : g2[i];
-                }
-                return child;
-            },
-            
-            // Gaussian mutation
-            mutate(genome) {
-                for (let i = 0; i < genome.length; i++) {
-                    if (Math.random() < this.MUTATION_RATE) {
-                        genome[i] += (Math.random() * 2 - 1) * this.MUTATION_STRENGTH;
-                    }
-                }
+                this.population = SimCore.evolve(this.population, {
+                    popSize: this.POP_SIZE,
+                    mutationRate: this.MUTATION_RATE,
+                    mutationStrength: this.MUTATION_STRENGTH,
+                });
             },
             
             // Update the neuro training HUD overlay
@@ -3269,8 +3104,8 @@
                 // Auto-speed: 8x for training
                 timeSpeedIndex = 11; // index 11 = 8x
                 timeSpeed = TIME_SPEEDS[timeSpeedIndex];
-                const tsEl = document.getElementById('time-speed-display');
-                if (tsEl) tsEl.textContent = `${timeSpeed}×`;
+                const tsEl = document.getElementById('time-speed-label');
+                if (tsEl) tsEl.textContent = `TIME: ${timeSpeed}x`;
                 
                 // Camera: wide overview
                 camOrbitCenter.set(0, 20, 0);
@@ -5065,6 +4900,69 @@
             updateShipHUD();
         }
         
+        // Visual-only laser beam — no damage (SimCore already applied it)
+        function fireLaserVisualOnly(ship, target) {
+            if (NEURO.headless) return;
+            const shipData = ship.userData;
+            const startPos = ship.position.clone();
+            const turretIndex = shipData.nextTurret || 0;
+            const turretName = 'turret' + turretIndex;
+            const turret = ship.getObjectByName(turretName);
+            let muzzlePos = startPos;
+            if (turret) {
+                const lens = turret.getObjectByName('lens');
+                if (lens) {
+                    ship.updateMatrixWorld(true);
+                    muzzlePos = new THREE.Vector3();
+                    lens.getWorldPosition(muzzlePos);
+                }
+            }
+            shipData.nextTurret = turretIndex === 0 ? 1 : 0;
+            const fullDistance = muzzlePos.distanceTo(target.position);
+            const laserDir = target.position.clone().sub(muzzlePos).normalize();
+            let distance = fullDistance;
+            if (target.userData && target.userData.type === 'spaceship') {
+                const SHIELD_RADIUS = 1.8;
+                const HULL_RADIUS = 0.7;
+                if (target.userData.battery > 0) {
+                    distance = Math.max(0.1, fullDistance - SHIELD_RADIUS);
+                } else {
+                    distance = Math.max(0.1, fullDistance - HULL_RADIUS);
+                }
+            }
+            const endPos = muzzlePos.clone().add(laserDir.clone().multiplyScalar(distance));
+            const teamColor = new THREE.Color(ship.userData.teamColor || 0xff0050);
+            const laserGeometry = new THREE.CylinderGeometry(0.005, 0.04, distance, 4);
+            const laserMaterial = new THREE.ShaderMaterial({
+                uniforms: { uColor: { value: teamColor } },
+                vertexShader: `
+                    varying float vFade;
+                    void main() {
+                        vFade = uv.y;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 uColor;
+                    varying float vFade;
+                    void main() {
+                        float alpha = 0.7 * (1.0 - vFade * 0.9);
+                        gl_FragColor = vec4(uColor, alpha);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            });
+            const laser = new THREE.Mesh(laserGeometry, laserMaterial);
+            const midPoint = muzzlePos.clone().add(endPos).multiplyScalar(0.5);
+            laser.position.copy(midPoint);
+            laser.lookAt(endPos);
+            laser.rotateX(Math.PI / 2);
+            scene.add(laser);
+            lasers.push({ mesh: laser, created: Date.now() });
+        }
+        
         // Torque-based orientation: steers angularVelocity toward desired quaternion
         // Returns true if torque was applied (costs fuel)
         function applyTorqueToward(ship, data, targetQuat) {
@@ -6710,30 +6608,16 @@
             
             // Simulation steps governed by timeSpeed
             if (NEURO.active && NEURO.headless) {
-                // Headless training: tight loop, no rendering, ~50ms budget per frame
+                // Headless training: tight loop, ~50ms budget per frame
                 const t0 = performance.now();
                 while (NEURO.active && performance.now() - t0 < 50) {
                     NEURO.update(); // NN forward pass + apply outputs + match lifecycle
-                    // Minimal physics for neural ships only (no asteroids in neuro scene)
-                    for (const ship of spaceships) {
-                        const d = ship.userData;
-                        // Angular velocity → quaternion
-                        const aLen = d.angularVelocity.length();
-                        if (aLen > 1e-6) {
-                            const dq = new THREE.Quaternion().setFromAxisAngle(
-                                d.angularVelocity.clone().normalize(), aLen);
-                            ship.quaternion.premultiply(dq);
-                            ship.quaternion.normalize();
-                        }
-                        // Position integration
-                        ship.position.add(d.velocity);
-                        // Battery recharge
-                        if (d.battery < d.maxBattery) {
-                            d.battery = Math.min(d.maxBattery, d.battery + 0.02);
-                            if (d.battery > 8 && d.weaponsDepleted) d.weaponsDepleted = false;
-                        }
-                        // Shield flash decay
-                        if (d.shieldFlash > 0) d.shieldFlash--;
+                    // Physics via SimCore, then sync back to Three.js
+                    for (const ship of NEURO.matchShips) {
+                        if (!ship.parent) continue;
+                        NEURO.syncToSim(ship);
+                        SimCore.shipSimStep(ship.userData.sim);
+                        NEURO.syncFromSim(ship);
                     }
                 }
                 NEURO.updateHUD();
