@@ -203,6 +203,7 @@
       alive: true,
       neuralDamageDealt: 0,
       neuralDamageTaken: 0,
+      neuralHullDamageDealt: 0,
       weaponsDepleted: false,
       shieldFlash: 0,
       isAccelerating: false,
@@ -469,6 +470,7 @@
             target.shieldFlash = 15;
           } else {
             target.hp -= PHYSICS.LASER_DAMAGE;
+            ship.neuralHullDamageDealt += PHYSICS.LASER_DAMAGE;
           }
 
           // Track damage
@@ -507,23 +509,35 @@
       const enemyShips = teams[enemyKey].ships;
       const enemyAlive = teams[enemyKey].alive;
 
-      // ── Damage dealt: primary signal (×5) ──
-      for (const s of myShips) score += s.neuralDamageDealt * 5;
+      // ── Damage dealt: base + hull bonus ──
+      for (const s of myShips) score += s.neuralDamageDealt * 2;
+      for (const s of myShips) score += (s.neuralHullDamageDealt || 0) * 5;
 
-      // ── Kills: huge bonus, time-scaled (faster = better) ──
+      // ── Focus fire: bonus for damage to lowest-HP enemy ──
+      for (const s of myShips) score += (s._focusDamage || 0) * 15;
+
+      // ── Kills: massive bonus — primary objective ──
       const enemiesKilled = enemyShips.length - enemyAlive.length;
-      score += enemiesKilled * 500;
+      score += enemiesKilled * 3000;
 
-      // ── Pursuit: reward closing distance over time ──
+      // ── Full wipe bonus ──
+      if (enemyAlive.length === 0) score += 2000;
+
+      // ── Team outcome ──
+      const myKilled = myShips.length - myAlive.length;
+      if (enemiesKilled > myKilled) score += 1000;
+      else if (enemiesKilled < myKilled) score -= 500;
+
+      // ── Pursuit: reward closing distance ──
       for (const s of myShips) score += (s._distanceClosed || 0) * 3;
 
-      // ── Time in weapon range: reward being close enough to fire ──
+      // ── Time in weapon range ──
       for (const s of myShips) score += (s._framesInRange || 0) * 1.0;
 
-      // ── Shots fired: reward aggression (even misses show intent) ──
+      // ── Shots fired ──
       for (const s of myShips) score += (s._shotsFired || 0) * 10;
 
-      // ── Final proximity: heavy penalty for distance at match end ──
+      // ── Final proximity ──
       if (myAlive.length > 0 && enemyAlive.length > 0) {
         let totalDist = 0;
         for (const s of myAlive) {

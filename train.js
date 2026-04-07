@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write
-// train.js — focused 2v2 asteroid combat trainer
-// Scenario: 2v2 in an asteroid field, ~60-unit arena
-// Penalties: wandering off arena, running out of fuel
+// train.js — 3v3 fleet trainer: focus fire + coordination
+// Scenario: 3v3 fleet combat, no asteroids, 200-unit arena
+// Scoring: kill-first + focus fire + team win/loss + fuel conservation
 // Seeds from best-genome.json if available
 // Run: deno run --allow-read --allow-write train.js [output.json]
 
@@ -9,9 +9,9 @@ const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.ur
 (new Function(simCoreSrc))();
 const {
   V3, Q, PHYSICS, NeuralNetwork,
-  createShipState, createAsteroid, checkAsteroidCollisions,
+  createShipState, checkAsteroidCollisions,
   shipSimStep, buildNNInputs, applyNNOutputs,
-  scoreMatch, runMatch, initPopulation, evolve,
+  initPopulation, evolve,
 } = globalThis.SimCore;
 
 // ── Config ──
@@ -21,12 +21,12 @@ const OPPONENTS_PER_EVAL = 3;
 const MUTATION_RATE = 0.12;
 const MUTATION_STRENGTH = 0.30;
 const OUTPUT_FILE = Deno.args[0] || 'best-genome.json';
-const ARENA_RADIUS = 80;          // ships penalized beyond this
+const ARENA_RADIUS = 100;
 const MATCH_FRAMES = 1500;        // ~25 seconds at 60fps
-const FLEET_SIZE = 2;
+const FLEET_SIZE = 3;
 const SEPARATION = 50;
 const SPREAD = 15;
-const RUN_MINUTES = 15;
+const RUN_MINUTES = 30;
 
 // ── Seed from existing genome ──
 function trySeedGenome() {
@@ -41,50 +41,99 @@ function trySeedGenome() {
   return null;
 }
 
-// ── Arena asteroids (fixed per generation, regenerated each gen) ──
-function generateArenaAsteroids(count = 12, radius = 60) {
-  const asteroids = [];
-  for (let i = 0; i < count; i++) {
-    const dir = V3.normalize([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
-    const pos = V3.scale(dir, radius * (0.2 + Math.random() * 0.8));
-    const r = 4 + Math.random() * 12;
-    asteroids.push(createAsteroid(pos, r));
+// ══════════════════════════════════════════════════════════════
+// ██  Scoring: kill-first + focus fire + team coordination
+// ══════════════════════════════════════════════════════════════
+function scoreTeamResult(allShips, matchFrames) {
+  const teams = { alpha: { ships: [], alive: [] }, omega: { ships: [], alive: [] } };
+  for (const s of allShips) {
+    teams[s.team].ships.push(s);
+    if (s.alive) teams[s.team].alive.push(s);
   }
-  return asteroids;
-}
 
-// ══════════════════════════════════════════════════════════════
-// ██  Enhanced scoring: base scoreMatch + wandering/fuel penalties
-// ══════════════════════════════════════════════════════════════
-function scoreWithPenalties(allShips, matchFrames) {
-  const base = scoreMatch(allShips, matchFrames);
+  function scoreTeam(teamKey, enemyKey) {
+    let score = 0;
+    const myShips = teams[teamKey].ships;
+    const myAlive = teams[teamKey].alive;
+    const enemyShips = teams[enemyKey].ships;
+    const enemyAlive = teams[enemyKey].alive;
 
-  // Gentle penalties — must not drown positive signals from random genomes
-  for (const teamKey of ['alpha', 'omega']) {
-    const ships = allShips.filter(s => s.team === teamKey);
-    let penalty = 0;
+    for (const s of myShips) {
+      // ── Net approach: reward closing, penalize retreating ──
+      const netApproach = (s._distanceClosed || 0) - (s._distanceOpened || 0);
+      score += netApproach * 10;
 
-    for (const s of ships) {
-      // ── Wandering penalty: mild, just discourage leaving arena ──
-      penalty += (s._wanderPenalty || 0) * 2;
+      // ── Retreat penalty ──
+      score -= (s._distanceOpened || 0) * 3;
 
-      // ── Fuel depletion: small nudge ──
-      if (s.fuel / s.maxFuel < 0.05) penalty += 300;
+      // ── Time in weapon range ──
+      score += (s._framesInRange || 0) * 3;
 
-      // ── Idle penalty: never fired at all ──
-      if ((s._shotsFired || 0) === 0) penalty += 200;
+      // ── Damage dealt: reduced base, hull still valued ──
+      score += s.neuralDamageDealt * 2;
+      score += (s.neuralHullDamageDealt || 0) * 5;
+
+      // ── Focus fire reward: bonus for damage to lowest-HP enemy ──
+      score += (s._focusDamage || 0) * 15;
+
+      // ── Shots fired: reward aggression ──
+      score += (s._shotsFired || 0) * 5;
+
+      // ── Never-closed penalty ──
+      if ((s._distanceClosed || 0) < 5) score -= 500;
+
+      // ── Never-fired penalty ──
+      if ((s._shotsFired || 0) === 0) score -= 300;
+
+      // ── Fuel conservation ──
+      const fuelRatio = s.fuel / s.maxFuel;
+      score += fuelRatio * 300;
+      if (s.fuel <= 0) score -= 500;
+      if (fuelRatio < 0.2) score -= (0.2 - fuelRatio) * 1000;
+
+      // ── Wandering penalty ──
+      score -= (s._wanderPenalty || 0) * 2;
     }
 
-    base[teamKey] -= penalty;
+    // ── Kills: massive bonus — THE primary objective ──
+    const enemiesKilled = enemyShips.length - enemyAlive.length;
+    score += enemiesKilled * 3000;
+
+    // ── Survival bonus ──
+    score += myAlive.length * 100;
+
+    // ── Team outcome: win/loss bonus ──
+    const myKilled = myShips.length - myAlive.length;
+    if (enemiesKilled > myKilled) score += 1000;       // winning team
+    else if (enemiesKilled < myKilled) score -= 500;    // losing team
+
+    // ── Full wipe bonus: annihilated the enemy fleet ──
+    if (enemyAlive.length === 0) score += 2000;
+
+    // ── Final proximity: penalty for distance at match end ──
+    if (myAlive.length > 0 && enemyAlive.length > 0) {
+      let totalDist = 0;
+      for (const s of myAlive) {
+        let minDist = Infinity;
+        for (const e of enemyAlive) minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
+        totalDist += minDist;
+      }
+      score -= (totalDist / myAlive.length) * 15;
+    }
+
+    return score;
   }
 
-  return base;
+  return {
+    alpha: scoreTeam('alpha', 'omega'),
+    omega: scoreTeam('omega', 'alpha'),
+  };
 }
 
 // ══════════════════════════════════════════════════════════════
-// ██  Run match with wandering tracking
+// ██  Run match with tracking (no asteroids)
 // ══════════════════════════════════════════════════════════════
-function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
+function runMatchWithTracking(alphaBrain, omegaBrain) {
   const allShips = [];
   for (let teamIdx = 0; teamIdx < 2; teamIdx++) {
     const team = teamIdx === 0 ? 'alpha' : 'omega';
@@ -99,14 +148,16 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
       s._brain = brain;
       s._framesInRange = 0;
       s._distanceClosed = 0;
+      s._distanceOpened = 0;
       s._shotsFired = 0;
+      s._focusDamage = 0;
       s._prevMinDist = Infinity;
       s._wanderPenalty = 0;
-      s._avgEnemyDist = 0;
       allShips.push(s);
     }
   }
 
+  const NO_ASTEROIDS = [];
   let frameCount = 0;
   for (let frame = 0; frame < MATCH_FRAMES; frame++) {
     frameCount++;
@@ -121,14 +172,24 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
 
     for (const s of allShips) {
       if (!s.alive) continue;
-      const inputs = buildNNInputs(s, allShips, asteroids);
+      const inputs = buildNNInputs(s, allShips, NO_ASTEROIDS);
       const outputs = s._brain.forward(inputs);
       const result = applyNNOutputs(s, outputs, allShips);
       shipSimStep(s);
-      if (asteroids.length > 0) checkAsteroidCollisions(s, asteroids);
 
       // Track per-frame metrics
-      if (result.firedAt) s._shotsFired++;
+      if (result.firedAt) {
+        s._shotsFired++;
+        // Focus fire: bonus if this shot hit the lowest-HP enemy
+        let lowestHp = Infinity, lowestEnemy = null;
+        for (const e of allShips) {
+          if (e === s || !e.alive || e.team === s.team) continue;
+          if (e.hp < lowestHp) { lowestHp = e.hp; lowestEnemy = e; }
+        }
+        if (result.firedAt === lowestEnemy) {
+          s._focusDamage += PHYSICS.LASER_DAMAGE;
+        }
+      }
       let minDistToEnemy = Infinity;
       for (const e of allShips) {
         if (e === s || !e.alive || e.team === s.team) continue;
@@ -137,8 +198,9 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
       }
       if (minDistToEnemy < PHYSICS.WEAPON_RANGE) s._framesInRange++;
       if (s._prevMinDist < Infinity && minDistToEnemy < Infinity) {
-        const closed = s._prevMinDist - minDistToEnemy;
-        if (closed > 0) s._distanceClosed += closed;
+        const delta = s._prevMinDist - minDistToEnemy;
+        if (delta > 0) s._distanceClosed += delta;
+        else s._distanceOpened += (-delta);
       }
       s._prevMinDist = minDistToEnemy;
 
@@ -146,11 +208,6 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
       const distFromCenter = V3.length(s.pos);
       if (distFromCenter > ARENA_RADIUS) {
         s._wanderPenalty += (distFromCenter - ARENA_RADIUS) * 0.1;
-      }
-
-      // Track avg distance to nearest enemy (penalize staying far)
-      if (minDistToEnemy < Infinity) {
-        s._avgEnemyDist += minDistToEnemy;
       }
     }
   }
@@ -172,9 +229,8 @@ function evaluate(genome, population) {
     const oppBrain = new NeuralNetwork(TOPOLOGY);
     oppBrain.fromGenome(population[oppIdx].genome);
 
-    const asteroids = generateArenaAsteroids(12, 60);
-    const ships = runMatchWithTracking(brain, oppBrain, asteroids);
-    const scores = scoreWithPenalties(ships, ships._matchFrames);
+    const ships = runMatchWithTracking(brain, oppBrain);
+    const scores = scoreTeamResult(ships, ships._matchFrames);
     totalFitness += scores.alpha;
   }
 
@@ -186,12 +242,11 @@ function evaluate(genome, population) {
 // ══════════════════════════════════════════════════════════════
 let population = initPopulation(POP_SIZE, TOPOLOGY);
 
-// Seed best genome into first slot
+// Seed best genome into first slot + mutated copies
 const seedGenome = trySeedGenome();
 if (seedGenome && seedGenome.length === population[0].genome.length) {
   population[0].genome = new Float64Array(seedGenome);
-  // Also seed a few mutated copies
-  for (let i = 1; i < Math.min(5, POP_SIZE); i++) {
+  for (let i = 1; i < Math.min(10, POP_SIZE); i++) {
     population[i].genome = new Float64Array(seedGenome);
     for (let j = 0; j < population[i].genome.length; j++) {
       if (Math.random() < MUTATION_RATE) {
@@ -199,13 +254,13 @@ if (seedGenome && seedGenome.length === population[0].genome.length) {
       }
     }
   }
-  console.log('Seeded 5 individuals from best-genome.json');
+  console.log('Seeded 10 individuals from best-genome.json');
 }
 
 let globalBestFitness = -Infinity;
 let globalBestGenome = null;
 
-console.log(`2v2 asteroid combat trainer`);
+console.log(`3v3 fleet trainer: focus fire + coordination`);
 console.log(`Pop: ${POP_SIZE}, opponents/eval: ${OPPONENTS_PER_EVAL}, arena: ${ARENA_RADIUS}u radius`);
 console.log(`Topology: ${TOPOLOGY.join('→')}, params: ${new NeuralNetwork(TOPOLOGY).paramCount}`);
 console.log(`Running for ${RUN_MINUTES} minutes...`);
@@ -218,12 +273,10 @@ while (performance.now() - t0 < timeLimitMs) {
   const genStart = performance.now();
   gen++;
 
-  // Evaluate every genome
   for (const p of population) {
     p.fitness = evaluate(p.genome, population);
   }
 
-  // Track best
   const sorted = [...population].sort((a, b) => b.fitness - a.fitness);
   const topFitness = sorted[0].fitness;
   const avgFitness = sorted.reduce((s, p) => s + p.fitness, 0) / POP_SIZE;
@@ -233,7 +286,6 @@ while (performance.now() - t0 < timeLimitMs) {
     globalBestGenome = Array.from(sorted[0].genome);
   }
 
-  // Evolve
   population = evolve(population, {
     popSize: POP_SIZE,
     mutationRate: MUTATION_RATE,
@@ -254,14 +306,13 @@ while (performance.now() - t0 < timeLimitMs) {
     );
   }
 
-  // Save checkpoint every 20 gens
   if (gen % 20 === 0 && globalBestGenome) {
     const checkpoint = {
       topology: TOPOLOGY,
       fitness: globalBestFitness,
       genome: globalBestGenome,
       generation: gen,
-      scenario: '2v2-asteroids',
+      scenario: '3v3-focusfire',
       config: { POP_SIZE, OPPONENTS_PER_EVAL, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
       trainedAt: new Date().toISOString(),
     };
@@ -276,7 +327,7 @@ if (globalBestGenome) {
     fitness: globalBestFitness,
     genome: globalBestGenome,
     generation: gen,
-    scenario: '2v2-asteroids',
+    scenario: '3v3-focusfire',
     config: { POP_SIZE, OPPONENTS_PER_EVAL, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
     trainedAt: new Date().toISOString(),
   };
