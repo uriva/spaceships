@@ -644,7 +644,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         // Game State
-        let scene, camera, renderer;
+        let scene, starScene, camera, renderer;
         let asteroids = [];
         let raycaster = new THREE.Raycaster();
         let mouse = new THREE.Vector2();
@@ -801,6 +801,7 @@
             
             // Scene setup
             scene = new THREE.Scene();
+            starScene = new THREE.Scene(); // Separate scene for stars — rendered first, then depth cleared
             // Fog density lowered so asteroids don't fade too quickly
             scene.fog = new THREE.FogExp2(0x0a0a14, 0.00008);
             
@@ -823,6 +824,7 @@
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.autoClear = false; // Manual two-pass: stars then main scene
             document.getElementById('canvas-container').appendChild(renderer.domElement);
             
             // Lighting (module-scoped so scenes can reconfigure)
@@ -1640,10 +1642,9 @@
                 celestialBodies.push(planet);
             }
             
-            // Store for animation — render stars first so opaque objects overwrite them
-            starFieldGroup.renderOrder = -1;
-            starFieldGroup.traverse(child => { child.renderOrder = -1; });
-            scene.add(starFieldGroup);
+            // Stars live in a separate scene rendered before the main scene
+            // (depth buffer is cleared between passes so opaque objects always overwrite stars)
+            starScene.add(starFieldGroup);
             
             starField = {
                 group: starFieldGroup,
@@ -1732,6 +1733,18 @@
         function loadScene(sceneName) {
             clearGameObjects();
             currentScene = sceneName;
+            
+            // Restore starfield celestial bodies visibility (lunar scene hides them)
+            if (starField) {
+                if (starField.celestialBodies) starField.celestialBodies.forEach(b => b.visible = true);
+                if (starField.nebula) starField.nebula.visible = true;
+                if (starField.field2) starField.field2.visible = true;
+                // Remove any solar system group from starField
+                if (starField.solarSystemGroup) {
+                    starField.group.remove(starField.solarSystemGroup);
+                    starField.solarSystemGroup = null;
+                }
+            }
             
             // Reset lighting to defaults (scenes may override below)
             WORLD_RADIUS = 5000;
@@ -1946,8 +1959,7 @@
                     roughness: 0.95,
                     metalness: 0.0,
                     flatShading: false,
-                    fog: false,
-                    side: THREE.DoubleSide
+                    fog: false
                 });
                 const moon = new THREE.Mesh(moonGeo, moonMat);
                 moon.scale.set(moonRadius, moonRadius, moonRadius);
@@ -1984,8 +1996,8 @@
                 scene.fog = null;
                 
                 // === EARTH — 384,400 km away, radius 6,371 km ===
-                const earthRadius = 6371 / KM_PER_UNIT; // 63,710 scene units
-                const earthDistance = 384400 / KM_PER_UNIT; // 3,844,000 scene units
+                const earthRadius = 6371 / KM_PER_UNIT; // 6,371 km
+                const earthDistance = 384400 / KM_PER_UNIT; // 384,400 km
                 
                 // Procedural Earth texture
                 const earthCanvas = document.createElement('canvas');
@@ -2073,6 +2085,136 @@
                 asteroids.push(earth);
                 scene.add(earth);
                 
+                // === REAL SOLAR SYSTEM (cosmetic, in starScene) ===
+                // Hide random celestial bodies + nebula from createStarField()
+                if (starField) {
+                    if (starField.celestialBodies) starField.celestialBodies.forEach(b => b.visible = false);
+                    if (starField.nebula) starField.nebula.visible = false;
+                    // Hide the red/gold star layer too — lunar sky should be clean
+                    if (starField.field2) starField.field2.visible = false;
+                }
+                
+                // Place Sun and planets at a sky-dome radius with correct angular
+                // positions. From the Moon, the Sun direction matches sunLight.
+                // Planets are placed at approximate angular separations (we pick a
+                // representative configuration — not ephemeris-accurate, but plausible).
+                {
+                    const solarGroup = new THREE.Group();
+                    const SKY_R = 45000; // sky-dome radius (4,500 km)
+                    
+                    // Sun direction: match sunLight = (1, 0.3, 0.5) normalized
+                    const sunDir = new THREE.Vector3(1, 0.3, 0.5).normalize();
+                    
+                    // ── THE SUN ──
+                    // Apparent angular diameter from Earth/Moon: ~0.53°
+                    // At SKY_R = 4,500 km, that's 4500 * tan(0.265°) ≈ 20.8 km apparent radius
+                    const sunAngularRadius = SKY_R * Math.tan(0.265 * Math.PI / 180);
+                    const sunGeo = new THREE.SphereGeometry(sunAngularRadius, 32, 32);
+                    const sunMat = new THREE.MeshBasicMaterial({
+                        color: 0xfff8e0,
+                        fog: false
+                    });
+                    const sunMesh = new THREE.Mesh(sunGeo, sunMat);
+                    sunMesh.position.copy(sunDir).multiplyScalar(SKY_R);
+                    
+                    // Glow sprite around sun
+                    const glowCanvas = document.createElement('canvas');
+                    glowCanvas.width = 256;
+                    glowCanvas.height = 256;
+                    const gCtx = glowCanvas.getContext('2d');
+                    const grad = gCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+                    grad.addColorStop(0, 'rgba(255,252,230,1)');
+                    grad.addColorStop(0.08, 'rgba(255,248,200,0.9)');
+                    grad.addColorStop(0.15, 'rgba(255,240,180,0.5)');
+                    grad.addColorStop(0.3, 'rgba(255,220,140,0.15)');
+                    grad.addColorStop(0.5, 'rgba(255,200,100,0.04)');
+                    grad.addColorStop(1, 'rgba(0,0,0,0)');
+                    gCtx.fillStyle = grad;
+                    gCtx.fillRect(0, 0, 256, 256);
+                    const glowTex = new THREE.CanvasTexture(glowCanvas);
+                    const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+                        map: glowTex,
+                        transparent: true,
+                        blending: THREE.AdditiveBlending,
+                        depthWrite: false,
+                        opacity: 1.0,
+                        fog: false
+                    }));
+                    sunSprite.scale.setScalar(sunAngularRadius * 12);
+                    sunMesh.add(sunSprite);
+                    solarGroup.add(sunMesh);
+                    
+                    // ── PLANETS ──
+                    // From the Moon, planets appear as bright dots. We represent them
+                    // as small glowing spheres + sprite halos at correct-ish angular
+                    // positions relative to the Sun (along the ecliptic plane).
+                    // The ecliptic from the Moon is roughly the XZ plane tilted ~5° from
+                    // the Earth-Moon orbital plane. We simplify: ecliptic ≈ XZ plane.
+                    
+                    // sunAngle = angle of sun in XZ plane
+                    const sunAngle = Math.atan2(sunDir.z, sunDir.x);
+                    
+                    // Planet data: [name, angular offset from Sun (degrees), color hex, apparent magnitude → brightness scale, visual radius]
+                    // Angular offsets are plausible elongations for an arbitrary date
+                    const planets = [
+                        { name: 'Venus',   angleDeg: -38,  color: 0xffffdd, radius: 35, brightness: 1.0 },   // brightest planet, max elongation ~47°
+                        { name: 'Jupiter', angleDeg: 125,  color: 0xffe8c0, radius: 28, brightness: 0.8 },   // bright, opposite side
+                        { name: 'Mars',    angleDeg: 85,   color: 0xff9966, radius: 18, brightness: 0.5 },   // reddish, moderate
+                        { name: 'Saturn',  angleDeg: 155,  color: 0xffd080, radius: 20, brightness: 0.4 },   // golden, dimmer
+                        { name: 'Mercury', angleDeg: 18,   color: 0xddddcc, radius: 12, brightness: 0.3 },   // close to sun, small elongation
+                    ];
+                    
+                    // Small glow texture for planet halos
+                    const planetGlowCanvas = document.createElement('canvas');
+                    planetGlowCanvas.width = 64;
+                    planetGlowCanvas.height = 64;
+                    const pgCtx = planetGlowCanvas.getContext('2d');
+                    const pgGrad = pgCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+                    pgGrad.addColorStop(0, 'rgba(255,255,255,1)');
+                    pgGrad.addColorStop(0.15, 'rgba(255,255,240,0.7)');
+                    pgGrad.addColorStop(0.4, 'rgba(255,255,220,0.15)');
+                    pgGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                    pgCtx.fillStyle = pgGrad;
+                    pgCtx.fillRect(0, 0, 64, 64);
+                    const planetGlowTex = new THREE.CanvasTexture(planetGlowCanvas);
+                    
+                    planets.forEach(p => {
+                        const angle = sunAngle + p.angleDeg * Math.PI / 180;
+                        // Slight Y variation (ecliptic isn't perfectly flat)
+                        const elev = (Math.random() - 0.5) * 0.05;
+                        const dir = new THREE.Vector3(
+                            Math.cos(angle),
+                            sunDir.y * 0.3 + elev,  // follow sun's slight elevation
+                            Math.sin(angle)
+                        ).normalize();
+                        
+                        // Planet dot
+                        const pGeo = new THREE.SphereGeometry(p.radius, 12, 12);
+                        const pMat = new THREE.MeshBasicMaterial({ color: p.color, fog: false });
+                        const pMesh = new THREE.Mesh(pGeo, pMat);
+                        pMesh.position.copy(dir).multiplyScalar(SKY_R);
+                        
+                        // Glow sprite
+                        const pSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+                            map: planetGlowTex,
+                            transparent: true,
+                            blending: THREE.AdditiveBlending,
+                            depthWrite: false,
+                            opacity: p.brightness,
+                            color: p.color,
+                            fog: false
+                        }));
+                        pSprite.scale.setScalar(p.radius * 8);
+                        pMesh.add(pSprite);
+                        
+                        solarGroup.add(pMesh);
+                    });
+                    
+                    // Add to starField.group so it follows camera (appears at infinity)
+                    starField.group.add(solarGroup);
+                    starField.solarSystemGroup = solarGroup;
+                }
+                
                 // Ship in low orbit ~100 km above surface
                 const orbitRadius = 1837 / KM_PER_UNIT;
                 const config = {
@@ -2133,6 +2275,41 @@
                 const G_eff = G_GAME * gravityMultiplier;
                 const orbitalSpeed = Math.sqrt(G_eff * moonMass / orbitRadius);
                 ship.userData.velocity = new THREE.Vector3(0, 0, orbitalSpeed);
+                
+                // Build compound collision shapes from a group's child meshes.
+                // Derives torus/cylinder/box shapes from Three.js geometry parameters.
+                // minSize filters out decorative detail (e.g. 1.0 = skip anything under 100m).
+                // Skips rotated boxes (spokes, panels) that would need OBB.
+                function buildCollisionShapes(group, minSize) {
+                    const shapes = [];
+                    for (const child of group.children) {
+                        if (!child.isMesh) continue;
+                        const geo = child.geometry;
+                        const p = geo.parameters;
+                        if (!p) continue;
+                        const pos = child.position;
+                        
+                        if (geo.type === 'TorusGeometry') {
+                            if (p.tube < minSize) continue;
+                            shapes.push({ type: 'torus', R: p.radius, r: p.tube,
+                                cx: pos.x, cy: pos.y, cz: pos.z });
+                        } else if (geo.type === 'CylinderGeometry') {
+                            const r = Math.max(p.radiusTop, p.radiusBottom);
+                            if (r < minSize || p.height < minSize) continue;
+                            shapes.push({ type: 'cylinder', radius: r, halfHeight: p.height / 2,
+                                cx: pos.x, cy: pos.y, cz: pos.z });
+                        } else if (geo.type === 'BoxGeometry') {
+                            // Skip rotated boxes — would need oriented box (OBB) collision
+                            if (Math.abs(child.rotation.y) > 0.01 || Math.abs(child.rotation.x) > 0.01 ||
+                                Math.abs(child.rotation.z) > 0.01) continue;
+                            const hx = p.width / 2, hy = p.height / 2, hz = p.depth / 2;
+                            if (Math.max(hx, hy, hz) < minSize) continue;
+                            shapes.push({ type: 'box', cx: pos.x, cy: pos.y, cz: pos.z,
+                                hx, hy, hz });
+                        }
+                    }
+                    return shapes;
+                }
                 
                 // === SPACE STATION (~5km diameter, city-sized) ===
                 {
@@ -2384,15 +2561,8 @@
                         rotationSpeed: { x: 0, y: 0.001, z: 0 }, // ~1 RPM spin for artificial gravity
                         mass: 1e6, // ~1 Mt (negligible gravity)
                         velocity: new THREE.Vector3(0, 0, 0),
-                        // Compound collision shapes — tori are rotated PI/2 so center
-                        // circles lie in XZ plane (tube extends Y) in group-local frame.
-                        // Torus: R = center-circle radius, r = tube radius (scene units).
-                        // Cylinder: radius + halfHeight along Y axis.
-                        collisionShapes: [
-                            { type: 'torus', R: SR, r: SRr },        // Main ring: R=25 (2.5km), r=2.5 (250m)
-                            { type: 'torus', R: 12, r: 1.5 },        // Inner ring: R=12 (1.2km), r=1.5 (150m)
-                            { type: 'cylinder', radius: 3.5, halfHeight: 11 } // Hub core (350m radius, 2.2km tall)
-                        ],
+                        // Auto-derived from child mesh geometries (minSize 1.0 filters decorative detail)
+                        collisionShapes: buildCollisionShapes(stGrp, 1.0),
                         // Bounding sphere for quick rejection (avoidance, proximity, etc.)
                         collisionSize: new THREE.Vector3(28, 22, 28)
                     };
@@ -2407,7 +2577,7 @@
                 WORLD_RADIUS = 25000; // 2,500 km
                 createBoundarySphere();
                 
-                // Adjust clip planes for this scene (distances up to ~4M scene units for Earth)
+                // Adjust clip planes for this scene (distances up to ~400,000 km for Earth)
                 camera.near = 1;
                 camera.far = 5000000;
                 camera.updateProjectionMatrix();
@@ -3391,13 +3561,17 @@
             if (key === 'x' || code === 'KeyX') keys.x = true;
             
             // TAB to cycle through ships, SHIFT+TAB to cycle back
+            // (no mode change — just selection)
             if (code === 'Tab') {
                 cycleSelection(event.shiftKey ? -1 : 1);
+                return;
             }
             
             // P to cycle through asteroids (closest to farthest), SHIFT+P to cycle back
+            // (no mode change — just selection)
             if (key === 'p' || code === 'KeyP') {
                 cycleAsteroids(event.shiftKey ? -1 : 1);
+                return;
             }
             
             // / to focus chat input
@@ -3926,20 +4100,16 @@
         function toggleFollowTarget() {
             // If already following, unfollow
             if (cameraFollowTarget) {
-                addChatMsg('Camera follow off', 'system');
                 cameraFollowTarget = null;
                 return;
             }
             
             // Follow the selected object (ship or asteroid)
             if (!selectedObject) {
-                addChatMsg('Nothing selected to follow', 'system');
                 return;
             }
             
             cameraFollowTarget = selectedObject;
-            const name = selectedObject.userData.name || 'object';
-            addChatMsg(`Camera following ${name}`, 'system');
             // Transition camera to look at it
             focusOnSelected(false);
         }
@@ -4305,23 +4475,25 @@
                         
                         for (const shape of shapes) {
                             if (shape.type === 'torus') {
-                                // Torus lies in XZ plane (center circle at Y=0, radius R).
-                                // Tube cross-section radius r. Ship collides when distance
-                                // to nearest point on center circle < r + shipRadius.
+                                // Torus center circle in XZ plane, offset by (cx, cy, cz).
+                                // Ship collides when distance to nearest point on center
+                                // circle < tube radius + shipRadius.
                                 const R = shape.R, r = shape.r;
-                                const dxz = Math.sqrt(localPos.x * localPos.x + localPos.z * localPos.z);
+                                const ox = (shape.cx || 0), oy = (shape.cy || 0), oz = (shape.cz || 0);
+                                const rx = localPos.x - ox, ry = localPos.y - oy, rz = localPos.z - oz;
+                                const dxz = Math.sqrt(rx * rx + rz * rz);
                                 // Nearest point on center circle (in XZ plane at radius R)
                                 let nearX, nearZ;
                                 if (dxz > 0.001) {
-                                    nearX = localPos.x * R / dxz;
-                                    nearZ = localPos.z * R / dxz;
+                                    nearX = rx * R / dxz;
+                                    nearZ = rz * R / dxz;
                                 } else {
                                     nearX = R; nearZ = 0; // degenerate: at axis center
                                 }
                                 // Distance from ship to that nearest point on circle
-                                const dx = localPos.x - nearX;
-                                const dy = localPos.y; // center circle is at Y=0
-                                const dz = localPos.z - nearZ;
+                                const dx = rx - nearX;
+                                const dy = ry;
+                                const dz = rz - nearZ;
                                 const distToTube = Math.sqrt(dx * dx + dy * dy + dz * dz);
                                 const threshold = r + shipRadius;
                                 
@@ -4337,23 +4509,25 @@
                                         }
                                         // Surface point: on tube surface along normal from circle point
                                         bestSurfaceLocal = new THREE.Vector3(
-                                            nearX + bestNormalLocal.x * threshold,
-                                            bestNormalLocal.y * threshold,
-                                            nearZ + bestNormalLocal.z * threshold
+                                            ox + nearX + bestNormalLocal.x * threshold,
+                                            oy + bestNormalLocal.y * threshold,
+                                            oz + nearZ + bestNormalLocal.z * threshold
                                         );
                                         hit = true;
                                     }
                                 }
                             } else if (shape.type === 'cylinder') {
-                                // Cylinder along Y axis: radius in XZ, halfHeight in Y
+                                // Cylinder along Y axis, offset by (cx, cy, cz)
                                 const cR = shape.radius + shipRadius;
                                 const cH = shape.halfHeight + shipRadius;
-                                const dxz = Math.sqrt(localPos.x * localPos.x + localPos.z * localPos.z);
+                                const ox = (shape.cx || 0), oy = (shape.cy || 0), oz = (shape.cz || 0);
+                                const rx = localPos.x - ox, ry = localPos.y - oy, rz = localPos.z - oz;
+                                const dxz = Math.sqrt(rx * rx + rz * rz);
                                 
-                                if (dxz < cR && Math.abs(localPos.y) < cH) {
+                                if (dxz < cR && Math.abs(ry) < cH) {
                                     // Inside cylinder — find shallowest escape
                                     const penRadial = cR - dxz;
-                                    const penAxial = cH - Math.abs(localPos.y);
+                                    const penAxial = cH - Math.abs(ry);
                                     const pen = Math.min(penRadial, penAxial);
                                     
                                     if (pen > bestPen) {
@@ -4361,18 +4535,53 @@
                                         if (penRadial < penAxial) {
                                             // Push outward radially
                                             if (dxz > 0.001) {
-                                                bestNormalLocal = new THREE.Vector3(localPos.x / dxz, 0, localPos.z / dxz);
+                                                bestNormalLocal = new THREE.Vector3(rx / dxz, 0, rz / dxz);
                                             } else {
                                                 bestNormalLocal = new THREE.Vector3(1, 0, 0);
                                             }
                                             bestSurfaceLocal = new THREE.Vector3(
-                                                bestNormalLocal.x * cR, localPos.y, bestNormalLocal.z * cR
+                                                ox + bestNormalLocal.x * cR, localPos.y, oz + bestNormalLocal.z * cR
                                             );
                                         } else {
                                             // Push out through cap
-                                            const capSign = localPos.y >= 0 ? 1 : -1;
+                                            const capSign = ry >= 0 ? 1 : -1;
                                             bestNormalLocal = new THREE.Vector3(0, capSign, 0);
-                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, capSign * cH, localPos.z);
+                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, oy + capSign * cH, localPos.z);
+                                        }
+                                        hit = true;
+                                    }
+                                }
+                            } else if (shape.type === 'box') {
+                                // Axis-aligned box in local frame with center (cx,cy,cz)
+                                // and half-extents (hx,hy,hz)
+                                const relX = localPos.x - shape.cx;
+                                const relY = localPos.y - shape.cy;
+                                const relZ = localPos.z - shape.cz;
+                                const exX = shape.hx + shipRadius;
+                                const exY = shape.hy + shipRadius;
+                                const exZ = shape.hz + shipRadius;
+                                
+                                if (Math.abs(relX) < exX && Math.abs(relY) < exY && Math.abs(relZ) < exZ) {
+                                    // Inside expanded box — find shallowest escape axis
+                                    const penX = exX - Math.abs(relX);
+                                    const penY = exY - Math.abs(relY);
+                                    const penZ = exZ - Math.abs(relZ);
+                                    const pen = Math.min(penX, penY, penZ);
+                                    
+                                    if (pen > bestPen) {
+                                        bestPen = pen;
+                                        if (pen === penX) {
+                                            const sx = relX >= 0 ? 1 : -1;
+                                            bestNormalLocal = new THREE.Vector3(sx, 0, 0);
+                                            bestSurfaceLocal = new THREE.Vector3(shape.cx + sx * exX, localPos.y, localPos.z);
+                                        } else if (pen === penY) {
+                                            const sy = relY >= 0 ? 1 : -1;
+                                            bestNormalLocal = new THREE.Vector3(0, sy, 0);
+                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, shape.cy + sy * exY, localPos.z);
+                                        } else {
+                                            const sz = relZ >= 0 ? 1 : -1;
+                                            bestNormalLocal = new THREE.Vector3(0, 0, sz);
+                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, localPos.y, shape.cz + sz * exZ);
                                         }
                                         hit = true;
                                     }
@@ -4730,7 +4939,10 @@
                     const radiusKm = (avgScale * KM_PER_UNIT);
                     const radiusStr = radiusKm >= 1 ? radiusKm.toFixed(1) + 'km' : Math.round(radiusKm * 1000) + 'm';
                     const mass = obj.userData.mass;
-                    const massStr = mass >= 1e12 ? (mass / 1e12).toFixed(1) + 'Tt' :
+                    const massStr = mass >= 1e21 ? (mass / 1e21).toFixed(1) + 'Zt' :
+                                   mass >= 1e18 ? (mass / 1e18).toFixed(1) + 'Et' :
+                                   mass >= 1e15 ? (mass / 1e15).toFixed(1) + 'Pt' :
+                                   mass >= 1e12 ? (mass / 1e12).toFixed(1) + 'Tt' :
                                    mass >= 1e9 ? (mass / 1e9).toFixed(1) + 'Gt' :
                                    mass >= 1e6 ? (mass / 1e6).toFixed(1) + 'Mt' :
                                    mass >= 1000 ? (mass / 1000).toFixed(1) + 'kt' : Math.round(mass) + 't';
@@ -5192,10 +5404,11 @@
                     isCameraTransitioning = false;
                     cameraMoveHeldFrames++;
                     const angularSpeed = 0.015;
-                    const radialSpeed = 2;
                     const t = Math.min(cameraMoveHeldFrames / 60, 1);
                     const aSpeed = angularSpeed + t * angularSpeed * 3;  // ramp angular
-                    const rSpeed = radialSpeed + t * 78;    // ramp radial: 2 → 80
+                    // Zoom: proportional to distance (scale-independent), acceleration uncapped
+                    const zoomT = cameraMoveHeldFrames / 60; // no cap — keeps accelerating
+                    const rSpeed = camSphereRadius * 0.008 * (1 + zoomT * 2);
                     
                     // W/S: pitch — rotate camSphereDir and camSphereUp around local right axis
                     if (keys.w || keys.s) {
@@ -5212,8 +5425,8 @@
                     }
                     
                     // Z/X: radius
-                    if (keys.z) camSphereRadius -= rSpeed * 0.3; // Slower zoom in
-                    if (keys.x) camSphereRadius += rSpeed * 0.3; // Slower zoom out
+                    if (keys.z) camSphereRadius -= rSpeed;
+                    if (keys.x) camSphereRadius += rSpeed;
                     camSphereRadius = Math.max(1, camSphereRadius);  // don't go through origin
                     
                     // Update camera position from sphere coords, orbiting around camOrbitCenter
@@ -5236,6 +5449,15 @@
             
             allObjects.forEach(obj => {
                 if (!obj.geometry) return;
+                // Skip huge celestial bodies — wireframe proximity is for small asteroids
+                const maxScale = Math.max(obj.scale.x, obj.scale.y, obj.scale.z);
+                if (maxScale > 5000) { // > 500 km radius — don't wireframe planets/moons
+                    if (obj.userData._isWireframe) {
+                        obj.material = obj.userData._origMaterial;
+                        obj.userData._isWireframe = false;
+                    }
+                    return;
+                }
                 
                 const toCamera = cameraPosition.clone().sub(obj.position);
                 const dist = toCamera.length();
@@ -5616,6 +5838,10 @@
             updateShipHUD();
             updateCursorBeams();
             
+            // Two-pass render: stars first (no depth interaction), then main scene
+            renderer.clear();
+            renderer.render(starScene, camera);
+            renderer.clearDepth();
             renderer.render(scene, camera);
             
             // Update 2D indicator AFTER render so camera matrix is final
