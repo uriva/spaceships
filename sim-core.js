@@ -220,10 +220,30 @@
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ██  Build 62-element NN input vector
+  // ██  Asteroid helpers
   // ══════════════════════════════════════════════════════════════
-  function buildNNInputs(ship, allShips) {
-    const inputs = new Float64Array(62);
+  function createAsteroid(pos, radius) {
+    return { pos: V3.clone(pos), radius };
+  }
+
+  function checkAsteroidCollisions(ship, asteroids) {
+    for (const a of asteroids) {
+      const dist = V3.distanceTo(ship.pos, a.pos);
+      if (dist < a.radius) {
+        ship.alive = false;
+        ship.hp = 0;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ██  Build 78-element NN input vector
+  // ══════════════════════════════════════════════════════════════
+  // 8 own state + 54 (6 ships × 9) + 16 (4 asteroids × 4) = 78
+  function buildNNInputs(ship, allShips, asteroids) {
+    const inputs = new Float64Array(78);
 
     // Own state (8 inputs)
     inputs[0] = ship.angVel[0];
@@ -270,6 +290,29 @@
         inputs[base + 8] = o.ship.battery / o.ship.maxBattery;
       }
       // else: stays 0
+    }
+
+    // Nearest 4 asteroids (4 each: local pos xyz / 500, radius / 50 = 16 inputs)
+    if (asteroids && asteroids.length > 0) {
+      const astDist = [];
+      for (const a of asteroids) {
+        const relPos = V3.sub(a.pos, ship.pos);
+        const dist = V3.length(relPos);
+        astDist.push({ asteroid: a, dist, relPos });
+      }
+      astDist.sort((a, b) => a.dist - b.dist);
+
+      for (let i = 0; i < 4; i++) {
+        const base = 62 + i * 4;
+        if (i < astDist.length) {
+          const a = astDist[i];
+          const localPos = Q.applyToVec3(invQuat, a.relPos);
+          inputs[base + 0] = localPos[0] / 500;
+          inputs[base + 1] = localPos[1] / 500;
+          inputs[base + 2] = localPos[2] / 500;
+          inputs[base + 3] = a.asteroid.radius / 50;
+        }
+      }
     }
 
     return inputs;
@@ -509,7 +552,7 @@
       // NN + physics for each living ship
       for (const s of allShips) {
         if (!s.alive) continue;
-        const inputs = buildNNInputs(s, allShips);
+        const inputs = buildNNInputs(s, allShips, []);
         const outputs = s._brain.forward(inputs);
         applyNNOutputs(s, outputs, allShips);
         shipSimStep(s);
@@ -526,6 +569,8 @@
     V3, Q, PHYSICS,
     NeuralNetwork,
     createShipState,
+    createAsteroid,
+    checkAsteroidCollisions,
     shipSimStep,
     buildNNInputs,
     applyNNOutputs,
