@@ -432,37 +432,76 @@
     let pitchCmd = Math.max(-1, Math.min(1, Kp * pitchError - Kd * pitchRate));
     let yawCmd   = Math.max(-1, Math.min(1, Kp * yawError   - Kd * yawRate));
 
-    // 5. Burn control — state-based approach
-    Q.applyToVec3Into(_steerInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _steerVelLocal);
-    const speed = V3.length(ship.vel);
-    const cosAngle = dist > 1e-6 ? lz / dist : 1;
-    const angError = Math.sqrt(yawError * yawError + pitchError * pitchError);
+    // 5. Burn control — velocity-error approach
+    //    Compute ideal velocity toward target, then correct the error.
+    //    This naturally handles approach, braking, AND lateral drift.
 
-    // Velocity toward target (world frame projection)
-    let velToward = 0;
-    if (dist > 1e-6) {
-      velToward = (ship.vel[0] * rx + ship.vel[1] * ry + ship.vel[2] * rz) / dist;
+    const speed = V3.length(ship.vel);
+
+    // Ideal velocity: point toward target at safe approach speed
+    // Safe speed ramps down as we get close: v = sqrt(2*a*d) * safety
+    const safeSpeed = dist < 0.5 ? 0
+      : Math.sqrt(2 * PHYSICS.THRUST * Math.max(0, dist - 0.5)) * 0.35;
+    const cappedSafe = Math.min(safeSpeed, PHYSICS.MAX_SPEED * 0.8);
+
+    // Ideal velocity vector (world frame): toward target at safe speed
+    let idealVx = 0, idealVy = 0, idealVz = 0;
+    if (dist > 0.5) {
+      const s = cappedSafe / dist;
+      idealVx = rx * s;
+      idealVy = ry * s;
+      idealVz = rz * s;
     }
 
-    // Max safe approach speed: v = sqrt(2*a*d) * safety
-    const safeSpeed = Math.sqrt(2 * PHYSICS.THRUST * Math.max(0, dist - 0.5)) * 0.4;
+    // Velocity error (world frame): what we need to subtract from current vel
+    const errVx = ship.vel[0] - idealVx;
+    const errVy = ship.vel[1] - idealVy;
+    const errVz = ship.vel[2] - idealVz;
+    const errSpeed = Math.sqrt(errVx * errVx + errVy * errVy + errVz * errVz);
 
     let burnCmd = 0;
-    if (dist < 2) {
-      // Close: just kill velocity
-      if (speed > 0.02) {
-        burnCmd = _steerVelLocal[2] > 0 ? -1 : 1;
+
+    if (errSpeed < 0.005) {
+      // Velocity is close enough to ideal — face target, no burn
+      // (pitchCmd/yawCmd already steer toward target)
+    } else {
+      // Transform velocity error into ship-local frame
+      Q.applyToVec3Into(_steerInvQ, errVx, errVy, errVz, _steerVelLocal);
+      const errLocalX = _steerVelLocal[0];
+      const errLocalY = _steerVelLocal[1];
+      const errLocalZ = _steerVelLocal[2];
+      const lateralErr = Math.sqrt(errLocalX * errLocalX + errLocalY * errLocalY);
+
+      // If velocity error has significant lateral component, override steering
+      // to face opposite the velocity error (so thrust can kill it)
+      if (lateralErr > Math.abs(errLocalZ) * 0.5 && lateralErr > 0.01) {
+        // Steer to face OPPOSITE the velocity error
+        // Error in world frame -> target position for steering = ship.pos - errV (normalized)
+        const errNx = -errVx / errSpeed;
+        const errNy = -errVy / errSpeed;
+        const errNz = -errVz / errSpeed;
+        // Transform this direction into local frame
+        Q.applyToVec3Into(_steerInvQ, errNx, errNy, errNz, _steerLocal);
+        const elx = _steerLocal[0], ely = _steerLocal[1], elz = _steerLocal[2];
+        const errDistXZ = Math.sqrt(elx * elx + elz * elz);
+        const corrYaw   = Math.atan2(elx, elz);
+        const corrPitch = Math.atan2(-ely, errDistXZ);
+
+        // Override pitch/yaw to steer toward the correction direction
+        pitchCmd = Math.max(-1, Math.min(1, Kp * corrPitch - Kd * pitchRate));
+        yawCmd   = Math.max(-1, Math.min(1, Kp * corrYaw   - Kd * yawRate));
+
+        // Thrust forward if reasonably aligned with correction direction
+        const corrAlign = elz; // cos of angle to correction direction (elz ~ cos since normalized)
+        if (corrAlign > 0.5) {
+          burnCmd = Math.min(1, errSpeed * 10);
+        }
+      } else {
+        // Velocity error is mostly along forward axis — face target, modulate burn
+        // errLocalZ > 0 means we're going too fast forward → brake
+        // errLocalZ < 0 means we're going too slow → thrust
+        burnCmd = -Math.max(-1, Math.min(1, errLocalZ * 10));
       }
-    } else if (speed > safeSpeed + 0.02) {
-      // Too fast for current distance — brake: thrust opposite to velocity's forward component
-      const fwdVel = _steerVelLocal[2];
-      if (Math.abs(fwdVel) > 0.005) {
-        burnCmd = fwdVel > 0 ? -1 : 1;
-      }
-      // If velocity is purely lateral to ship, don't thrust (it won't help), just let steering fix alignment
-    } else if (angError < 0.5 && cosAngle > 0.7 && speed < safeSpeed - 0.01) {
-      // Well-aligned, safe speed margin available — accelerate
-      burnCmd = Math.min(1, (safeSpeed - speed) * 10);
     }
     burnCmd = Math.max(-1, Math.min(1, burnCmd));
 

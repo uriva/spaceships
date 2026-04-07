@@ -15,7 +15,7 @@ const {
 } = globalThis.SimCore;
 
 // ── Config ──
-const TOPOLOGY = [80, 16, 16, 6];
+const TOPOLOGY = [80, 16, 16, 5];
 const POP_SIZE = 80;
 const OPPONENTS_PER_EVAL = 3;
 const MUTATION_RATE = 0.12;

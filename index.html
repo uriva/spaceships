@@ -5011,6 +5011,8 @@
             // Sync orbit system
             camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
             camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
+            camSphereUp.addScaledVector(camSphereDir, -camSphereUp.dot(camSphereDir)).normalize();
+            if (camSphereUp.lengthSq() < 0.001) camSphereUp.set(0, 1, 0);
             updateCameraPosition();
         }
         
@@ -5083,6 +5085,9 @@
             camOrbitCenter.copy(cameraTarget);
             camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
             camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
+            // Re-orthogonalize camSphereUp against new camSphereDir
+            camSphereUp.addScaledVector(camSphereDir, -camSphereUp.dot(camSphereDir)).normalize();
+            if (camSphereUp.lengthSq() < 0.001) camSphereUp.set(0, 1, 0);
             
             updateCameraPosition();
         }
@@ -6557,6 +6562,8 @@
                     camOrbitCenter.copy(targetCameraTarget);
                     camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
                     camSphereRadius = cameraPosition.distanceTo(camOrbitCenter) || 1;
+                    camSphereUp.addScaledVector(camSphereDir, -camSphereUp.dot(camSphereDir)).normalize();
+                    if (camSphereUp.lengthSq() < 0.001) camSphereUp.set(0, 1, 0);
                     camera.lookAt(cameraTarget);
                 }
                 isCameraTransitioning = false;
