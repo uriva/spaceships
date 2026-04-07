@@ -616,6 +616,7 @@
                 <option value="lunar-orbit">Lunar Orbit</option>
                 <option value="fleet-battle">Fleet Battle</option>
                 <option value="neuro-training">Neuro Training</option>
+                <option value="follow-crosshair">Follow Crosshair</option>
              </select>
         </div>
         <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
@@ -740,7 +741,7 @@
           const NeuralNetwork = SimCore.NeuralNetwork;
          
          // --- Trained genome from 3v3 focus-fire (243 gens, fitness 24209) ---
-         const TRAINED_TOPOLOGY = [80, 16, 16, 6];
+         const TRAINED_TOPOLOGY = [80, 16, 16, 5];
          const TRAINED_GENOME = new Float64Array([
               0.733290,-0.066055,0.307118,0.067954,-0.233847,-0.009913,-0.330501,-0.241006,0.478243,0.187741,-0.798338,0.514689,-1.254704,-0.370130,-0.257717,
               -0.137266,0.867957,-0.164150,0.741895,1.233466,-0.638139,-0.264618,0.348642,0.294128,1.159732,-0.500332,-1.358283,0.936151,-0.302662,0.049668,
@@ -892,7 +893,7 @@
         const NEURO = {
             active: false,
             headless: false,
-            TOPOLOGY: [80, 16, 16, 6],  // inputs, hidden×2, outputs
+            TOPOLOGY: [80, 16, 16, 5],  // inputs, hidden×2, outputs
             POP_SIZE: 20,
             MATCHES_PER_GEN: 10,
             MUTATION_RATE: 0.1,
@@ -1157,8 +1158,7 @@
                                 }
                             }
                             const idx = Math.min(
-                                Math.floor((outputs[4] + 1) / 2 * nEnemies),
-                                nEnemies - 1
+                                Math.floor((outputs[3] + 1) / 2 * nEnemies),                                nEnemies - 1
                             );
                             const target = this._enemyBufNeuro[Math.max(0, idx)];
                             if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
@@ -3451,6 +3451,100 @@
                 cameraTarget.copy(camOrbitCenter);
                 cameraUpVector.set(0, 1, 0);
                 updateCameraPosition();
+            } else if (sceneName === 'follow-crosshair') {
+                // === FOLLOW CROSSHAIR — ships steer toward the player's 3D cursor ===
+                WORLD_RADIUS = 5000;
+                scene.fog = new THREE.FogExp2(0x0a0a14, 0.00008);
+                
+                createBoundarySphere();
+                createAsteroids();
+                
+                // Spawn 5 player ships in a loose cluster near origin
+                const fcCount = 5;
+                for (let i = 0; i < fcCount; i++) {
+                    const angle = (i / fcCount) * Math.PI * 2;
+                    const r = 20 + Math.random() * 10;
+                    const x = Math.cos(angle) * r;
+                    const y = (Math.random() - 0.5) * 10;
+                    const z = Math.sin(angle) * r;
+                    
+                    const config = {
+                        x, y, z,
+                        color: 0x44aaff,
+                        team: 'player',
+                        name: `Follower-${String(i + 1).padStart(2, '0')}`
+                    };
+                    
+                    const ship = createSingleSpaceship(config, spaceships.length);
+                    ship.position.set(x, y, z);
+                    
+                    // SimCore state (needed for steerToward)
+                    const sim = SimCore.createShipState('alpha');
+                    sim.maxHp = ship.userData.maxHp;
+                    sim.hp = ship.userData.hp;
+                    sim.maxBattery = ship.userData.maxBattery;
+                    sim.battery = ship.userData.battery;
+                    sim.maxFuel = ship.userData.maxFuel;
+                    sim.fuel = ship.userData.fuel;
+                    ship.userData.sim = sim;
+                    // Mark as PD-steered (no neuralBrain — steerToward handles everything)
+                    ship.userData.followCrosshair = true;
+                    ship.userData.neuralDamageDealt = 0;
+                    ship.userData.neuralDamageTaken = 0;
+                    ship.userData.neuralHullDamageDealt = 0;
+                    ship.userData.neuralSurvived = true;
+                    
+                    spaceships.push(ship);
+                    scene.add(ship);
+                    
+                    // Trail
+                    const TRAIL_LENGTH = 60;
+                    const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                    const trailColors = new Float32Array(TRAIL_LENGTH * 4);
+                    const trailGeometry = new THREE.BufferGeometry();
+                    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                    trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
+                    const trailMaterial = new THREE.ShaderMaterial({
+                        vertexShader: `
+                            attribute vec4 customColor;
+                            varying vec4 vColor;
+                            void main() {
+                                vColor = customColor;
+                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                            }
+                        `,
+                        fragmentShader: `
+                            varying vec4 vColor;
+                            void main() {
+                                gl_FragColor = vColor;
+                            }
+                        `,
+                        transparent: true,
+                        depthWrite: false,
+                        blending: THREE.AdditiveBlending
+                    });
+                    const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                    trailLine.frustumCulled = false;
+                    scene.add(trailLine);
+                    ship.userData.trail = {
+                        line: trailLine,
+                        positions: [],
+                        maxLength: TRAIL_LENGTH,
+                    };
+                }
+                
+                // Select first ship
+                if (spaceships.length > 0) selectShip(0);
+                
+                // Camera: close overview
+                camOrbitCenter.set(0, 0, 0);
+                camSphereRadius = 80;
+                camSphereDir.set(0, 0.4, 1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
             }
             
             addChatMsg(`Scene: ${sceneName.replace(/-/g, ' ')}`, 'system');
@@ -5503,7 +5597,7 @@
                 
                 // Neural ships: NN controls thrust/torque directly via NEURO.applyOutputs()
                 // Skip the behavior-driven thrust/brake/RCS sections
-                if (!data.neuralBrain) {
+                if (!data.neuralBrain && !data.followCrosshair) {
                 
                 if (data.isAccelerating && hasFuel) {
                     _tmpVelDiff.copy(data.targetVelocity).sub(data.velocity);
@@ -5561,7 +5655,7 @@
                     }
                 }
                 
-                } // end if (!data.neuralBrain)
+                } // end if (!data.neuralBrain && !data.followCrosshair)
                 
                 // Always apply angular velocity to quaternion (conservation of angular momentum)
                 const angSpeed2 = data.angularVelocity.length();
@@ -7607,7 +7701,7 @@
             let nNeural = 0;
             for (let i = 0; i < spaceships.length; i++) {
                 const s = spaceships[i];
-                if (s.userData.neuralBrain && s.parent) {
+                if ((s.userData.neuralBrain || s.userData.followCrosshair) && s.parent) {
                     if (nNeural < _neuralBuf.length) _neuralBuf[nNeural] = s;
                     else _neuralBuf.push(s);
                     nNeural++;
@@ -7630,12 +7724,21 @@
             
             const simAsteroids = getSimCoreAsteroids();
             
-            // Run NN for each neural ship
+            // Run NN or PD controller for each neural/follow ship
             for (let ni = 0; ni < nNeural; ni++) {
                 const ship = _neuralBuf[ni];
                 const sim = ship.userData.sim;
-                const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
-                const outputs = ship.userData.neuralBrain.forward(inputs);
+                
+                let outputs;
+                if (ship.userData.followCrosshair) {
+                    // PD steering toward crosshair
+                    const targetPos = [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z];
+                    const steer = SimCore.steerToward(sim, targetPos);
+                    outputs = [steer[0], steer[1], steer[2], 0, 0]; // no targeting, no fire
+                } else {
+                    const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
+                    outputs = ship.userData.neuralBrain.forward(inputs);
+                }
                 const { firedAt } = SimCore.applyNNOutputs(sim, outputs, _allSimBuf);
                 
                 // Visual laser beam (no .find() — linear scan reusing nothing)
@@ -7672,7 +7775,7 @@
                         }
                     }
                     const idx = Math.min(
-                        Math.floor((outputs[4] + 1) / 2 * nEnemies),
+                        Math.floor((outputs[3] + 1) / 2 * nEnemies),
                         nEnemies - 1
                     );
                     const target = _enemyBufVis[Math.max(0, idx)];
@@ -7701,7 +7804,7 @@
                         selectedObject = null;
                         if (spaceships.length > 0) selectShip(0);
                     }
-                } else if (ship.userData.neuralBrain) {
+                } else if (ship.userData.neuralBrain || ship.userData.followCrosshair) {
                     NEURO.syncFromSim(ship);
                 } else {
                     // Non-neural: sync damage/battery changes

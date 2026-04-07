@@ -117,7 +117,7 @@
     WEAPON_COST: 8,
     LASER_DAMAGE: 10,
     BATTERY_RECHARGE: 0.02,
-    MAX_ANG_SPEED: 0.1,         // rad/frame cap for neural torque
+    MAX_ANG_SPEED: 0.05,         // rad/frame cap for neural torque
     WEAPON_RANGE: 200,          // units (~20 km)
   };
 
@@ -215,6 +215,9 @@
   // ██  Per-frame ship physics (angular velocity → quat, position, recharge)
   // ══════════════════════════════════════════════════════════════
   function shipSimStep(ship) {
+    // Angular damping — ships naturally stop spinning (~84% decay/sec)
+    V3.scaleMut(ship.angVel, 0.97);
+
     // Angular velocity → quaternion integration
     const angSpeed = V3.length(ship.angVel);
     if (angSpeed > 1e-6) {
@@ -269,6 +272,8 @@
   // Pre-allocated scratch buffers to avoid per-call allocations
   const _nnInputs = new Float64Array(80);
   const _fwdTmp = [0, 0, 0];
+  const _rightTmp = [0, 0, 0];
+  const _upTmp = [0, 0, 0];
   const _relPosTmp = [0, 0, 0];
   const _relVelTmp = [0, 0, 0];
   const _localTmp = [0, 0, 0];
@@ -335,9 +340,9 @@
       if (i < nOthers) {
         const o = _othersBuf[i];
         Q.applyToVec3Into(_invQuatTmp, o.r0, o.r1, o.r2, _localTmp);
-        inputs[base + 0] = _localTmp[0] / 200;
-        inputs[base + 1] = _localTmp[1] / 200;
-        inputs[base + 2] = _localTmp[2] / 200;
+        inputs[base + 0] = _localTmp[0] / 50;
+        inputs[base + 1] = _localTmp[1] / 50;
+        inputs[base + 2] = _localTmp[2] / 50;
         const vr0 = o.ship.vel[0] - ship.vel[0];
         const vr1 = o.ship.vel[1] - ship.vel[1];
         const vr2 = o.ship.vel[2] - ship.vel[2];
@@ -390,6 +395,81 @@
   }
 
   // ══════════════════════════════════════════════════════════════
+  // ██  PD Steering Controller — analytical steering toward a target
+  // ══════════════════════════════════════════════════════════════
+  // Returns [pitch, yaw, burn] in [-1, 1].
+  // Sign convention: +pitch = nose down, +yaw = nose right,
+  //                  +burn = thrust forward, -burn = thrust backward.
+  const _steerInvQ = [0, 0, 0, 1];
+  const _steerLocal = [0, 0, 0];
+  const _steerLocalAngVel = [0, 0, 0];
+
+  const _steerVelLocal = [0, 0, 0];
+
+  function steerToward(ship, targetPos) {
+    // 1. Compute target position in ship-local frame
+    const rx = targetPos[0] - ship.pos[0];
+    const ry = targetPos[1] - ship.pos[1];
+    const rz = targetPos[2] - ship.pos[2];
+    Q.invertInto(ship.quat, _steerInvQ);
+    Q.applyToVec3Into(_steerInvQ, rx, ry, rz, _steerLocal);
+    const lx = _steerLocal[0], ly = _steerLocal[1], lz = _steerLocal[2];
+
+    // 2. Angular error: atan2 gives angle from forward (+Z) axis
+    const distXZ = Math.sqrt(lx * lx + lz * lz);
+    const dist = Math.sqrt(lx * lx + ly * ly + lz * lz);
+    const yawError = Math.atan2(lx, lz);       // +X => positive yaw
+    const pitchError = Math.atan2(-ly, distXZ); // +Y target => negative pitch
+
+    // 3. Angular velocity in local frame (derivative term)
+    Q.applyToVec3Into(_steerInvQ, ship.angVel[0], ship.angVel[1], ship.angVel[2], _steerLocalAngVel);
+    const pitchRate = _steerLocalAngVel[0];
+    const yawRate = _steerLocalAngVel[1];
+
+    // 4. PD control for rotation
+    const Kp = 4.0;
+    const Kd = 8.0;
+    let pitchCmd = Math.max(-1, Math.min(1, Kp * pitchError - Kd * pitchRate));
+    let yawCmd   = Math.max(-1, Math.min(1, Kp * yawError   - Kd * yawRate));
+
+    // 5. Burn control — state-based approach
+    Q.applyToVec3Into(_steerInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _steerVelLocal);
+    const speed = V3.length(ship.vel);
+    const cosAngle = dist > 1e-6 ? lz / dist : 1;
+    const angError = Math.sqrt(yawError * yawError + pitchError * pitchError);
+
+    // Velocity toward target (world frame projection)
+    let velToward = 0;
+    if (dist > 1e-6) {
+      velToward = (ship.vel[0] * rx + ship.vel[1] * ry + ship.vel[2] * rz) / dist;
+    }
+
+    // Max safe approach speed: v = sqrt(2*a*d) * safety
+    const safeSpeed = Math.sqrt(2 * PHYSICS.THRUST * Math.max(0, dist - 0.5)) * 0.4;
+
+    let burnCmd = 0;
+    if (dist < 2) {
+      // Close: just kill velocity
+      if (speed > 0.02) {
+        burnCmd = _steerVelLocal[2] > 0 ? -1 : 1;
+      }
+    } else if (speed > safeSpeed + 0.02) {
+      // Too fast for current distance — brake: thrust opposite to velocity's forward component
+      const fwdVel = _steerVelLocal[2];
+      if (Math.abs(fwdVel) > 0.005) {
+        burnCmd = fwdVel > 0 ? -1 : 1;
+      }
+      // If velocity is purely lateral to ship, don't thrust (it won't help), just let steering fix alignment
+    } else if (angError < 0.5 && cosAngle > 0.7 && speed < safeSpeed - 0.01) {
+      // Well-aligned, safe speed margin available — accelerate
+      burnCmd = Math.min(1, (safeSpeed - speed) * 10);
+    }
+    burnCmd = Math.max(-1, Math.min(1, burnCmd));
+
+    return [pitchCmd, yawCmd, burnCmd];
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // ██  Apply NN outputs to ship — returns { firedAt: ship|null }
   // ══════════════════════════════════════════════════════════════
   const _enemyBuf = [];   // reused buffer for enemy list in applyNNOutputs
@@ -399,21 +479,28 @@
     const hasFuel = ship.fuel > 0;
     _firedResult.firedAt = null;
 
-    // outputs[0..2]: body torque (xyz)
+    // outputs[0]: pitch (nose up/down), outputs[1]: yaw (nose left/right)
+    // Computed in ship-local frame then applied as world-space angular velocity
     if (hasFuel) {
-      ship.angVel[0] += outputs[0] * PHYSICS.TORQUE;
-      ship.angVel[1] += outputs[1] * PHYSICS.TORQUE;
-      ship.angVel[2] += outputs[2] * PHYSICS.TORQUE;
-      // Cap angular velocity
-      const angSpeed = V3.length(ship.angVel);
-      if (angSpeed > PHYSICS.MAX_ANG_SPEED) {
-        V3.scaleMut(ship.angVel, PHYSICS.MAX_ANG_SPEED / angSpeed);
+      const pitch = Math.abs(outputs[0]) > 0.1 ? outputs[0] : 0;
+      const yaw   = Math.abs(outputs[1]) > 0.1 ? outputs[1] : 0;
+      if (pitch !== 0 || yaw !== 0) {
+        Q.applyToVec3Into(ship.quat, 1, 0, 0, _rightTmp);  // local right
+        Q.applyToVec3Into(ship.quat, 0, 1, 0, _upTmp);     // local up
+        // pitch = rotate around right axis, yaw = rotate around up axis
+        ship.angVel[0] += (_rightTmp[0] * pitch + _upTmp[0] * yaw) * PHYSICS.TORQUE;
+        ship.angVel[1] += (_rightTmp[1] * pitch + _upTmp[1] * yaw) * PHYSICS.TORQUE;
+        ship.angVel[2] += (_rightTmp[2] * pitch + _upTmp[2] * yaw) * PHYSICS.TORQUE;
+        const angSpeed = V3.length(ship.angVel);
+        if (angSpeed > PHYSICS.MAX_ANG_SPEED) {
+          V3.scaleMut(ship.angVel, PHYSICS.MAX_ANG_SPEED / angSpeed);
+        }
+        ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST);
       }
-      ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST);
     }
 
-    // outputs[3]: engine burn along forward axis
-    const burn = outputs[3];
+    // outputs[2]: engine burn along forward axis
+    const burn = outputs[2];
     if (Math.abs(burn) > 0.1 && hasFuel) {
       Q.applyToVec3Into(ship.quat, 0, 0, 1, _fwdTmp);
       ship.vel[0] += _fwdTmp[0] * burn * PHYSICS.THRUST;
@@ -431,7 +518,7 @@
       ship.isBraking = false;
     }
 
-    // outputs[4]: target selection, outputs[5]: fire
+    // outputs[3]: target selection, outputs[4]: fire
     let nEnemies = 0;
     for (let i = 0; i < allShips.length; i++) {
       const s = allShips[i];
@@ -452,13 +539,13 @@
 
     if (nEnemies > 0) {
       const idx = Math.min(
-        Math.floor((outputs[4] + 1) / 2 * nEnemies),
+        Math.floor((outputs[3] + 1) / 2 * nEnemies),
         nEnemies - 1
       );
       const target = _enemyBuf[Math.max(0, idx)];
 
       // Fire
-      if (outputs[5] > 0 && ship.battery >= PHYSICS.WEAPON_COST) {
+      if (outputs[4] > 0 && ship.battery >= PHYSICS.WEAPON_COST) {
         const dist = V3.distanceTo(ship.pos, target.pos);
         if (dist < PHYSICS.WEAPON_RANGE) {
           // Deduct battery from shooter
@@ -715,6 +802,7 @@
     shipSimStep,
     buildNNInputs,
     applyNNOutputs,
+    steerToward,
     scoreMatch,
     crossover,
     mutate,
