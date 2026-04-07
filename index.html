@@ -600,6 +600,7 @@
                 <option value="team-vs-team">Team vs Team</option>
                 <option value="solo-explorer">Solo Explorer</option>
                 <option value="lunar-orbit">Lunar Orbit</option>
+                <option value="fleet-battle">Fleet Battle</option>
             </select>
         </div>
         <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
@@ -2586,6 +2587,119 @@
                 camOrbitCenter.copy(ship.position);
                 camSphereRadius = 200;
                 camSphereDir.set(0, 0.5, -1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
+            } else if (sceneName === 'fleet-battle') {
+                // === FLEET BATTLE — deep space, two massive fleets facing off ===
+                WORLD_RADIUS = 8000; // 800 km engagement zone
+                scene.fog = null; // deep space, no fog
+                
+                // Dim, dramatic lighting — distant stars only
+                sunLight.position.set(0, 1, 0.3).normalize().multiplyScalar(500);
+                sunLight.intensity = 1.5;
+                ambientLight.color.set(0x334455);
+                ambientLight.intensity = 0.8;
+                blueLight.intensity = 0.3;
+                pinkLight.intensity = 0.2;
+                
+                createBoundarySphere();
+                
+                // Fleet configuration
+                const fleetSize = 200;
+                const separation = 600; // 60 km between fleet centers
+                const fleets = [
+                    { team: 'player', color: 0x44aaff, prefix: 'Alpha', zSign: +1 },
+                    { team: 'enemy',  color: 0xff4444, prefix: 'Omega', zSign: -1 },
+                ];
+                
+                fleets.forEach(fleet => {
+                    const centerZ = fleet.zSign * separation;
+                    
+                    // Formation: rectangular blocks arranged in rows and columns
+                    // 10 columns (X) x 5 layers (Y) x 4 ranks (Z depth)
+                    const cols = 10;   // across
+                    const layers = 5;  // vertical
+                    const ranks = 4;   // depth
+                    const spacingX = 12; // 1.2 km between ships horizontally
+                    const spacingY = 10; // 1 km vertical spacing
+                    const spacingZ = 14; // 1.4 km rank depth
+                    
+                    let shipIdx = 0;
+                    for (let rank = 0; rank < ranks && shipIdx < fleetSize; rank++) {
+                        for (let layer = 0; layer < layers && shipIdx < fleetSize; layer++) {
+                            for (let col = 0; col < cols && shipIdx < fleetSize; col++) {
+                                const x = (col - (cols - 1) / 2) * spacingX + (Math.random() - 0.5) * 3;
+                                const y = (layer - (layers - 1) / 2) * spacingY + (Math.random() - 0.5) * 3;
+                                const z = centerZ + fleet.zSign * rank * spacingZ + (Math.random() - 0.5) * 3;
+                                
+                                const config = {
+                                    x, y, z,
+                                    color: fleet.color,
+                                    team: fleet.team,
+                                    name: `${fleet.prefix}-${String(shipIdx + 1).padStart(3, '0')}`
+                                };
+                                
+                                const ship = createSingleSpaceship(config, spaceships.length);
+                                ship.position.set(x, y, z);
+                                
+                                // Face the opposing fleet
+                                ship.lookAt(x, y, -fleet.zSign * separation);
+                                
+                                spaceships.push(ship);
+                                scene.add(ship);
+                                
+                                // Trail
+                                const TRAIL_LENGTH = 60;
+                                const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                                const trailColors = new Float32Array(TRAIL_LENGTH * 4);
+                                const trailGeometry = new THREE.BufferGeometry();
+                                trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                                trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
+                                const trailMaterial = new THREE.ShaderMaterial({
+                                    vertexShader: `
+                                        attribute vec4 customColor;
+                                        varying vec4 vColor;
+                                        void main() {
+                                            vColor = customColor;
+                                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                                        }
+                                    `,
+                                    fragmentShader: `
+                                        varying vec4 vColor;
+                                        void main() {
+                                            gl_FragColor = vColor;
+                                        }
+                                    `,
+                                    transparent: true,
+                                    depthWrite: false,
+                                    blending: THREE.AdditiveBlending
+                                });
+                                const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                                trailLine.frustumCulled = false;
+                                scene.add(trailLine);
+                                ship.userData.trail = {
+                                    line: trailLine,
+                                    positions: [],
+                                    maxLength: TRAIL_LENGTH,
+                                };
+                                
+                                shipIdx++;
+                            }
+                        }
+                    }
+                });
+                
+                // Select first player ship
+                const firstPlayer = spaceships.findIndex(s => s.userData.team === 'player');
+                if (firstPlayer >= 0) selectShip(firstPlayer);
+                
+                // Camera: overview from above and slightly behind player fleet
+                camOrbitCenter.set(0, 50, 0);
+                camSphereRadius = 900;
+                camSphereDir.set(0, 0.4, 1).normalize();
                 camSphereUp.set(0, 1, 0);
                 cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
                 cameraTarget.copy(camOrbitCenter);
@@ -5449,15 +5563,6 @@
             
             allObjects.forEach(obj => {
                 if (!obj.geometry) return;
-                // Skip huge celestial bodies — wireframe proximity is for small asteroids
-                const maxScale = Math.max(obj.scale.x, obj.scale.y, obj.scale.z);
-                if (maxScale > 5000) { // > 500 km radius — don't wireframe planets/moons
-                    if (obj.userData._isWireframe) {
-                        obj.material = obj.userData._origMaterial;
-                        obj.userData._isWireframe = false;
-                    }
-                    return;
-                }
                 
                 const toCamera = cameraPosition.clone().sub(obj.position);
                 const dist = toCamera.length();
@@ -5476,7 +5581,8 @@
                         Math.pow(obj.scale.z * localDir.z, 2)
                     );
                     
-                    isInside = dist < exactRadius * 1.1; // 10% margin
+                    // Fixed 500m buffer so large bodies don't wireframe hundreds of km above surface
+                    isInside = dist < exactRadius + 5;
                 }
                 
                 if (isInside && !obj.userData._isWireframe) {
@@ -6466,33 +6572,117 @@
                 if (speed > 0.02 && data.behavior && data.behavior.type !== 'fuelCritical') {
                     const lookAhead = Math.max(30, speed * 60); // ~1 second of travel at 60fps, min 30 units
                     const futurePos = ship.position.clone().add(data.velocity.clone().normalize().multiplyScalar(lookAhead));
+                    const safetyMargin = 5; // 500m buffer
                     for (const asteroid of asteroids) {
-                        // Check if future position is inside asteroid
                         const toFuture = futurePos.clone().sub(asteroid.position);
                         const cs = asteroid.userData.collisionSize;
                         const maxScale = cs
                             ? Math.max(cs.x, cs.y, cs.z)
                             : Math.max(asteroid.scale.x, asteroid.scale.y, asteroid.scale.z);
-                        const dangerRadius = maxScale + 5; // 5 units safety margin
-                        if (toFuture.length() < dangerRadius) {
-                            // We're heading into an asteroid — compute avoidance direction
-                            const toAsteroid = asteroid.position.clone().sub(ship.position);
-                            const forward = data.velocity.clone().normalize();
-                            // Perpendicular avoidance: component of toAsteroid perpendicular to velocity
-                            const avoidDir = toAsteroid.clone().sub(forward.clone().multiplyScalar(toAsteroid.dot(forward)));
-                            if (avoidDir.length() > 0.01) {
-                                avoidDir.normalize().negate(); // steer AWAY from asteroid
-                            } else {
-                                avoidDir.set(0, 1, 0); // edge case: head-on, dodge upward
+                        
+                        // Quick rejection: skip if future pos is far from bounding sphere
+                        if (toFuture.length() > maxScale + safetyMargin + lookAhead) continue;
+                        
+                        // Check compound shapes if available (station, complex objects)
+                        const shapes = asteroid.userData.collisionShapes;
+                        let threatened = false;
+                        let threatNormalWorld = null; // direction to steer away
+                        
+                        if (shapes && shapes.length > 0) {
+                            // Transform future pos into asteroid's local frame
+                            const invQuat = asteroid.quaternion.clone().invert();
+                            const localFuture = futurePos.clone().sub(asteroid.position).applyQuaternion(invQuat);
+                            // Also check current pos (in case already very close)
+                            const localCurrent = ship.position.clone().sub(asteroid.position).applyQuaternion(invQuat);
+                            
+                            let bestDist = Infinity;
+                            let bestNormalLocal = null;
+                            
+                            for (const shape of shapes) {
+                                // Check both future and current positions
+                                for (const lp of [localFuture, localCurrent]) {
+                                    if (shape.type === 'torus') {
+                                        const R = shape.R, r = shape.r;
+                                        const ox = shape.cx || 0, oy = shape.cy || 0, oz = shape.cz || 0;
+                                        const rx = lp.x - ox, ry = lp.y - oy, rz = lp.z - oz;
+                                        const dxz = Math.sqrt(rx * rx + rz * rz);
+                                        let nearX, nearZ;
+                                        if (dxz > 0.001) { nearX = rx * R / dxz; nearZ = rz * R / dxz; }
+                                        else { nearX = R; nearZ = 0; }
+                                        const dx = rx - nearX, dy = ry, dz = rz - nearZ;
+                                        const distToTube = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                        const threshold = r + safetyMargin;
+                                        if (distToTube < threshold && distToTube < bestDist) {
+                                            bestDist = distToTube;
+                                            if (distToTube > 0.001) {
+                                                bestNormalLocal = new THREE.Vector3(dx / distToTube, dy / distToTube, dz / distToTube);
+                                            } else {
+                                                bestNormalLocal = new THREE.Vector3(0, 1, 0);
+                                            }
+                                        }
+                                    } else if (shape.type === 'cylinder') {
+                                        const cR = shape.radius + safetyMargin;
+                                        const cH = shape.halfHeight + safetyMargin;
+                                        const ox = shape.cx || 0, oy = shape.cy || 0, oz = shape.cz || 0;
+                                        const rx = lp.x - ox, ry = lp.y - oy, rz = lp.z - oz;
+                                        const dxz = Math.sqrt(rx * rx + rz * rz);
+                                        if (dxz < cR && Math.abs(ry) < cH) {
+                                            const penRadial = cR - dxz;
+                                            const penAxial = cH - Math.abs(ry);
+                                            const dist = Math.min(penRadial, penAxial);
+                                            if (dist < bestDist) {
+                                                bestDist = dist;
+                                                if (penRadial < penAxial) {
+                                                    bestNormalLocal = dxz > 0.001
+                                                        ? new THREE.Vector3(rx / dxz, 0, rz / dxz)
+                                                        : new THREE.Vector3(1, 0, 0);
+                                                } else {
+                                                    bestNormalLocal = new THREE.Vector3(0, ry >= 0 ? 1 : -1, 0);
+                                                }
+                                            }
+                                        }
+                                    } else if (shape.type === 'box') {
+                                        const relX = lp.x - shape.cx, relY = lp.y - shape.cy, relZ = lp.z - shape.cz;
+                                        const exX = shape.hx + safetyMargin, exY = shape.hy + safetyMargin, exZ = shape.hz + safetyMargin;
+                                        if (Math.abs(relX) < exX && Math.abs(relY) < exY && Math.abs(relZ) < exZ) {
+                                            const pen = Math.min(exX - Math.abs(relX), exY - Math.abs(relY), exZ - Math.abs(relZ));
+                                            if (pen < bestDist) {
+                                                bestDist = pen;
+                                                const penX = exX - Math.abs(relX), penY = exY - Math.abs(relY), penZ = exZ - Math.abs(relZ);
+                                                const minPen = Math.min(penX, penY, penZ);
+                                                if (minPen === penX) bestNormalLocal = new THREE.Vector3(relX >= 0 ? 1 : -1, 0, 0);
+                                                else if (minPen === penY) bestNormalLocal = new THREE.Vector3(0, relY >= 0 ? 1 : -1, 0);
+                                                else bestNormalLocal = new THREE.Vector3(0, 0, relZ >= 0 ? 1 : -1);
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            // Blend avoidance into target velocity
-                            const avoidVel = data.velocity.clone().add(avoidDir.multiplyScalar(THRUST * 5));
-                            avoidVel.normalize().multiplyScalar(speed); // maintain current speed
+                            
+                            if (bestNormalLocal) {
+                                threatened = true;
+                                threatNormalWorld = bestNormalLocal.applyQuaternion(asteroid.quaternion).normalize();
+                            }
+                        } else {
+                            // Simple bounding sphere check (regular asteroids)
+                            const dangerRadius = maxScale + safetyMargin;
+                            if (toFuture.length() < dangerRadius) {
+                                threatened = true;
+                                // Normal: away from asteroid center
+                                const toShip = ship.position.clone().sub(asteroid.position);
+                                threatNormalWorld = toShip.length() > 0.01 ? toShip.normalize() : new THREE.Vector3(0, 1, 0);
+                            }
+                        }
+                        
+                        if (threatened && threatNormalWorld) {
+                            // Steer along the escape normal
+                            const avoidVel = data.velocity.clone().add(threatNormalWorld.multiplyScalar(THRUST * 5));
+                            avoidVel.normalize().multiplyScalar(speed);
                             data.targetVelocity.copy(avoidVel);
                             data.isAccelerating = true;
                             const astName = asteroid.userData.name || 'asteroid';
                             shipReport(data, 'avoidance', `Collision course — evading ${astName}`);
-                            break; // handle one threat at a time
+                            break;
                         }
                     }
                 }
