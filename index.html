@@ -662,6 +662,10 @@
         // Game State
         let scene, starScene, camera, renderer;
         let asteroids = [];
+        // Pre-allocated buffers for updateNeuralShips() — must be before animate()
+        const _neuralBuf = [];     // reused list of neural ships
+        const _allSimBuf = [];     // reused list of sim states
+        const _enemyBufVis = [];   // reused list of enemies for turret aiming
         let raycaster = new THREE.Raycaster();
         let mouse = new THREE.Vector2();
         let starField;
@@ -836,14 +840,28 @@
          ]);
          
          // Convert Three.js asteroids array to SimCore format for NN inputs
+         // Cached SimCore asteroid array — rebuilt only when asteroids change
+         let _simAsteroidsCache = null;
+         let _simAsteroidsCacheLen = -1;
          function getSimCoreAsteroids() {
-             return asteroids.map(a => {
+             if (_simAsteroidsCache && _simAsteroidsCacheLen === asteroids.length) {
+                 // Update positions in-place (asteroids don't move, but be safe)
+                 for (let i = 0; i < asteroids.length; i++) {
+                     const a = asteroids[i], s = _simAsteroidsCache[i];
+                     s.pos[0] = a.position.x; s.pos[1] = a.position.y; s.pos[2] = a.position.z;
+                 }
+                 return _simAsteroidsCache;
+             }
+             _simAsteroidsCache = [];
+             for (let i = 0; i < asteroids.length; i++) {
+                 const a = asteroids[i];
                  const avgRadius = (a.scale.x + a.scale.y + a.scale.z) / 3;
-                 return SimCore.createAsteroid(
-                     [a.position.x, a.position.y, a.position.z],
-                     avgRadius
-                 );
-             });
+                 _simAsteroidsCache.push(SimCore.createAsteroid(
+                     [a.position.x, a.position.y, a.position.z], avgRadius
+                 ));
+             }
+             _simAsteroidsCacheLen = asteroids.length;
+             return _simAsteroidsCache;
          }
          
          // Create a NeuralNetwork loaded with the trained genome
@@ -1050,51 +1068,81 @@
                 return SimCore.buildNNInputs(ship.userData.sim, simShips, simAsteroids);
             },
             
+            // Pre-allocated buffers for NEURO.update() — avoid per-frame allocations
+            _simShipsBuf: [],       // reused array of sim states
+            _enemyBufNeuro: [],     // reused array of enemy ships for turret aiming
+            
             // Called each sim frame from the animate loop
             update() {
                 if (!this.active) return;
                 this.matchFrame++;
                 
                 // Batch sync: Three.js → SimCore for all living ships
-                for (const ms of this.matchShips) {
+                // Also collect sim states into reused buffer (no .map())
+                let nSim = 0;
+                for (let i = 0; i < this.matchShips.length; i++) {
+                    const ms = this.matchShips[i];
                     if (ms.parent) this.syncToSim(ms);
+                    const sim = ms.userData.sim;
+                    if (nSim < this._simShipsBuf.length) this._simShipsBuf[nSim] = sim;
+                    else this._simShipsBuf.push(sim);
+                    nSim++;
                 }
-                const simShips = this.matchShips.map(ms => ms.userData.sim);
+                this._simShipsBuf.length = nSim;
+                const simShips = this._simShipsBuf;
                 const simAsteroids = getSimCoreAsteroids();
                 
                 // Run NN for each living neural ship
-                for (const ship of this.matchShips) {
+                for (let si = 0; si < this.matchShips.length; si++) {
+                    const ship = this.matchShips[si];
                     if (!ship.parent) continue; // destroyed
                     const sim = ship.userData.sim;
                     const inputs = SimCore.buildNNInputs(sim, simShips, simAsteroids);
                     const outputs = ship.userData.neuralBrain.forward(inputs);
                     const { firedAt } = SimCore.applyNNOutputs(sim, outputs, simShips);
                     
-                    // Visual beam (if not headless)
+                    // Visual beam (if not headless) — no .find(), linear scan
                     if (firedAt && !this.headless) {
-                        const targetThree = this.matchShips.find(ms => ms.userData.sim === firedAt);
-                        if (targetThree) {
-                            // Sync shooter position back first so beam starts from right place
-                            this.syncFromSim(ship);
-                            fireLaserVisualOnly(ship, targetThree);
+                        for (let j = 0; j < this.matchShips.length; j++) {
+                            if (this.matchShips[j].userData.sim === firedAt) {
+                                this.syncFromSim(ship);
+                                fireLaserVisualOnly(ship, this.matchShips[j]);
+                                break;
+                            }
                         }
                     }
                     
-                    // Turret aiming (visual)
-                    const data = ship.userData;
-                    const enemies = this.matchShips.filter(s =>
-                        s !== ship && s.parent && s.userData.team !== data.team
-                    ).sort((a, b) =>
-                        ship.position.distanceTo(a.position) - ship.position.distanceTo(b.position)
-                    );
-                    if (enemies.length > 0) {
-                        const idx = Math.min(
-                            Math.floor((outputs[4] + 1) / 2 * enemies.length),
-                            enemies.length - 1
-                        );
-                        const target = enemies[Math.max(0, idx)];
-                        if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
-                            data.behavior = { type: 'attack', target };
+                    // Turret aiming — collect enemies into reused buffer (no .filter().sort())
+                    if (!this.headless) {
+                        const data = ship.userData;
+                        let nEnemies = 0;
+                        for (let j = 0; j < this.matchShips.length; j++) {
+                            const s = this.matchShips[j];
+                            if (s !== ship && s.parent && s.userData.team !== data.team) {
+                                if (nEnemies < this._enemyBufNeuro.length) this._enemyBufNeuro[nEnemies] = s;
+                                else this._enemyBufNeuro.push(s);
+                                nEnemies++;
+                            }
+                        }
+                        if (nEnemies > 0) {
+                            for (let a = 0; a < nEnemies - 1; a++) {
+                                for (let b = a + 1; b < nEnemies; b++) {
+                                    if (ship.position.distanceToSquared(this._enemyBufNeuro[b].position) <
+                                        ship.position.distanceToSquared(this._enemyBufNeuro[a].position)) {
+                                        const tmp = this._enemyBufNeuro[a];
+                                        this._enemyBufNeuro[a] = this._enemyBufNeuro[b];
+                                        this._enemyBufNeuro[b] = tmp;
+                                    }
+                                }
+                            }
+                            const idx = Math.min(
+                                Math.floor((outputs[4] + 1) / 2 * nEnemies),
+                                nEnemies - 1
+                            );
+                            const target = this._enemyBufNeuro[Math.max(0, idx)];
+                            if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
+                                data.behavior = { type: 'attack', target };
+                            }
                         }
                     }
                 }
@@ -1254,6 +1302,27 @@
         const sharedParticleGeo = new THREE.SphereGeometry(0.1, 4, 4);
         const particleMaterialCache = {};  // keyed by color hex
         let lasers = [];
+        const laserPool = [];               // reusable dead laser meshes
+        // Shared laser geometry (unit cylinder, scaled per-shot) + two team materials
+        const _sharedLaserGeo = new THREE.CylinderGeometry(0.005, 0.04, 1, 4);
+        const _laserMaterialCache = {};      // keyed by color hex
+        function _getLaserMaterial(colorHex) {
+            if (_laserMaterialCache[colorHex]) return _laserMaterialCache[colorHex];
+            const mat = new THREE.ShaderMaterial({
+                uniforms: { uColor: { value: new THREE.Color(colorHex) } },
+                vertexShader: `varying float vFade; void main(){ vFade=uv.y; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+                fragmentShader: `uniform vec3 uColor; varying float vFade; void main(){ float a=0.7*(1.0-vFade*0.9); gl_FragColor=vec4(uColor,a);}`,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            });
+            _laserMaterialCache[colorHex] = mat;
+            return mat;
+        }
+        const _tmpLaserMuzzle = new THREE.Vector3();
+        const _tmpLaserEnd = new THREE.Vector3();
+        const _tmpLaserDir = new THREE.Vector3();
+        const _tmpLaserMid = new THREE.Vector3();
         
         let dustParticles = [];
         const dustPool = [];
@@ -2294,6 +2363,21 @@
                 const ship = createSingleSpaceship(config, 0);
                 ship.position.set(config.x, config.y, config.z);
                 registerPosition(new THREE.Vector3(config.x, config.y, config.z), 3);
+                
+                // Attach neural brain + SimCore state
+                const sim = SimCore.createShipState('alpha');
+                sim.maxHp = ship.userData.maxHp;
+                sim.hp = ship.userData.hp;
+                sim.maxBattery = ship.userData.maxBattery;
+                sim.battery = ship.userData.battery;
+                sim.maxFuel = ship.userData.maxFuel;
+                sim.fuel = ship.userData.fuel;
+                ship.userData.sim = sim;
+                ship.userData.neuralBrain = createTrainedBrain();
+                ship.userData.neuralDamageDealt = 0;
+                ship.userData.neuralDamageTaken = 0;
+                ship.userData.neuralSurvived = true;
+                
                 spaceships.push(ship);
                 scene.add(ship);
                 
@@ -3161,35 +3245,21 @@
                                 // Face the opposing fleet
                                 ship.lookAt(x, y, -fleet.zSign * separation);
                                 
-                                // Assign trained neural brain to enemy ships
-                                if (fleet.team === 'enemy') {
-                                    const simTeam = 'omega';
-                                    const sim = SimCore.createShipState(simTeam);
-                                    // Match SimCore maxHp/maxBattery/maxFuel to Three.js values
-                                    sim.maxHp = ship.userData.maxHp;
-                                    sim.hp = ship.userData.hp;
-                                    sim.maxBattery = ship.userData.maxBattery;
-                                    sim.battery = ship.userData.battery;
-                                    sim.maxFuel = ship.userData.maxFuel;
-                                    sim.fuel = ship.userData.fuel;
-                                    ship.userData.sim = sim;
-                                    ship.userData.neuralBrain = createTrainedBrain();
-                                    ship.userData.neuralDamageDealt = 0;
-                                    ship.userData.neuralDamageTaken = 0;
-                                    ship.userData.neuralSurvived = true;
-                                } else {
-                                    // Player ships also need sim states so NN can see them
-                                    const sim = SimCore.createShipState('alpha');
-                                    sim.maxHp = ship.userData.maxHp;
-                                    sim.hp = ship.userData.hp;
-                                    sim.maxBattery = ship.userData.maxBattery;
-                                    sim.battery = ship.userData.battery;
-                                    sim.maxFuel = ship.userData.maxFuel;
-                                    sim.fuel = ship.userData.fuel;
-                                    ship.userData.sim = sim;
-                                    ship.userData.neuralDamageDealt = 0;
-                                    ship.userData.neuralDamageTaken = 0;
-                                }
+                                // Assign trained neural brain to ALL ships
+                                const simTeam = fleet.team === 'enemy' ? 'omega' : 'alpha';
+                                const sim = SimCore.createShipState(simTeam);
+                                // Match SimCore maxHp/maxBattery/maxFuel to Three.js values
+                                sim.maxHp = ship.userData.maxHp;
+                                sim.hp = ship.userData.hp;
+                                sim.maxBattery = ship.userData.maxBattery;
+                                sim.battery = ship.userData.battery;
+                                sim.maxFuel = ship.userData.maxFuel;
+                                sim.fuel = ship.userData.fuel;
+                                ship.userData.sim = sim;
+                                ship.userData.neuralBrain = createTrainedBrain();
+                                ship.userData.neuralDamageDealt = 0;
+                                ship.userData.neuralDamageTaken = 0;
+                                ship.userData.neuralSurvived = true;
                                 
                                 spaceships.push(ship);
                                 scene.add(ship);
@@ -3350,6 +3420,21 @@
                     if (shell.radius > 0) {
                         ship.lookAt(offset.x, offset.y, offset.z);
                     }
+                    
+                    // Attach neural brain + SimCore state
+                    const simTeam = team === 'player' ? 'alpha' : 'omega';
+                    const sim = SimCore.createShipState(simTeam);
+                    sim.maxHp = ship.userData.maxHp;
+                    sim.hp = ship.userData.hp;
+                    sim.maxBattery = ship.userData.maxBattery;
+                    sim.battery = ship.userData.battery;
+                    sim.maxFuel = ship.userData.maxFuel;
+                    sim.fuel = ship.userData.fuel;
+                    ship.userData.sim = sim;
+                    ship.userData.neuralBrain = createTrainedBrain();
+                    ship.userData.neuralDamageDealt = 0;
+                    ship.userData.neuralDamageTaken = 0;
+                    ship.userData.neuralSurvived = true;
                     
                     spaceships.push(ship);
                     scene.add(ship);
@@ -3837,6 +3922,14 @@
             shieldMesh.name = 'shield';
             ship.add(shieldMesh);
             
+            // Cache child refs so we never need getObjectByName in the hot loop
+            const _cachedNavLights = navLights.map(nl => ship.getObjectByName(nl.name));
+            const _cachedShield = shieldMesh;
+            const _cachedTurret0 = ship.getObjectByName('turret0');
+            const _cachedTurret1 = ship.getObjectByName('turret1');
+            const _cachedLens0 = _cachedTurret0 ? _cachedTurret0.getObjectByName('lens') : null;
+            const _cachedLens1 = _cachedTurret1 ? _cachedTurret1.getObjectByName('lens') : null;
+            
             ship.userData = { 
                 type: 'spaceship', 
                 selectable: true,
@@ -3863,7 +3956,12 @@
                 baseY: config.y || 0,
                 fuelDepleted: false,
                 weaponsDepleted: false,
-                nextTurret: 0
+                nextTurret: 0,
+                // Cached child refs (avoids getObjectByName per frame)
+                _shield: _cachedShield,
+                _navLights: _cachedNavLights,
+                _turrets: [_cachedTurret0, _cachedTurret1],
+                _lenses: [_cachedLens0, _cachedLens1],
             };
             ship.position.set(config.x, config.y || 0, config.z);
             
@@ -4945,7 +5043,7 @@
                 if (td.battery > 0) {
                     // Shield absorbs the hit
                     td.battery = Math.max(0, td.battery - LASER_DAMAGE);
-                    td.shieldFlash = 45; // show shield for 45 frames (~0.75s)
+                    td.shieldFlash = 15; // show shield for 15 frames (~0.25s)
                 } else {
                     // Battery depleted — hull takes damage
                     td.hp -= LASER_DAMAGE; // Takes 5 unshielded shots to kill
@@ -4989,13 +5087,12 @@
             if (NEURO.headless) return;
             
             const startPos = ship.position.clone();
-            // Pick the active turret and get its lens world position
+            // Pick the active turret and get its lens world position (cached refs)
             const turretIndex = shipData.nextTurret || 0;
-            const turretName = 'turret' + turretIndex;
-            const turret = ship.getObjectByName(turretName);
+            const turret = shipData._turrets ? shipData._turrets[turretIndex] : null;
             let muzzlePos = startPos;
             if (turret) {
-                const lens = turret.getObjectByName('lens');
+                const lens = shipData._lenses ? shipData._lenses[turretIndex] : null;
                 if (lens) {
                     ship.updateMatrixWorld(true);
                     muzzlePos = new THREE.Vector3();
@@ -5065,25 +5162,23 @@
         }
         
         // Visual-only laser beam — no damage (SimCore already applied it)
+        // Uses pooled mesh + shared material (no per-shot geometry/shader compilation)
         function fireLaserVisualOnly(ship, target) {
             if (NEURO.headless) return;
             const shipData = ship.userData;
-            const startPos = ship.position.clone();
             const turretIndex = shipData.nextTurret || 0;
-            const turretName = 'turret' + turretIndex;
-            const turret = ship.getObjectByName(turretName);
-            let muzzlePos = startPos;
+            const turret = shipData._turrets ? shipData._turrets[turretIndex] : null;
+            _tmpLaserMuzzle.copy(ship.position);
             if (turret) {
-                const lens = turret.getObjectByName('lens');
+                const lens = shipData._lenses ? shipData._lenses[turretIndex] : null;
                 if (lens) {
                     ship.updateMatrixWorld(true);
-                    muzzlePos = new THREE.Vector3();
-                    lens.getWorldPosition(muzzlePos);
+                    lens.getWorldPosition(_tmpLaserMuzzle);
                 }
             }
             shipData.nextTurret = turretIndex === 0 ? 1 : 0;
-            const fullDistance = muzzlePos.distanceTo(target.position);
-            const laserDir = target.position.clone().sub(muzzlePos).normalize();
+            const fullDistance = _tmpLaserMuzzle.distanceTo(target.position);
+            _tmpLaserDir.copy(target.position).sub(_tmpLaserMuzzle).normalize();
             let distance = fullDistance;
             if (target.userData && target.userData.type === 'spaceship') {
                 const SHIELD_RADIUS = 1.8;
@@ -5094,36 +5189,27 @@
                     distance = Math.max(0.1, fullDistance - HULL_RADIUS);
                 }
             }
-            const endPos = muzzlePos.clone().add(laserDir.clone().multiplyScalar(distance));
-            const teamColor = new THREE.Color(ship.userData.teamColor || 0xff0050);
-            const laserGeometry = new THREE.CylinderGeometry(0.005, 0.04, distance, 4);
-            const laserMaterial = new THREE.ShaderMaterial({
-                uniforms: { uColor: { value: teamColor } },
-                vertexShader: `
-                    varying float vFade;
-                    void main() {
-                        vFade = uv.y;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `,
-                fragmentShader: `
-                    uniform vec3 uColor;
-                    varying float vFade;
-                    void main() {
-                        float alpha = 0.7 * (1.0 - vFade * 0.9);
-                        gl_FragColor = vec4(uColor, alpha);
-                    }
-                `,
-                transparent: true,
-                blending: THREE.AdditiveBlending,
-                depthWrite: false,
-            });
-            const laser = new THREE.Mesh(laserGeometry, laserMaterial);
-            const midPoint = muzzlePos.clone().add(endPos).multiplyScalar(0.5);
-            laser.position.copy(midPoint);
-            laser.lookAt(endPos);
+            _tmpLaserEnd.copy(_tmpLaserMuzzle).addScaledVector(_tmpLaserDir, distance);
+            _tmpLaserMid.copy(_tmpLaserMuzzle).add(_tmpLaserEnd).multiplyScalar(0.5);
+            
+            // Reuse pooled mesh or create one with shared geo+material
+            const colorHex = shipData.teamColor || 0xff0050;
+            const mat = _getLaserMaterial(colorHex);
+            let laser;
+            if (laserPool.length > 0) {
+                laser = laserPool.pop();
+                laser.material = mat;
+                laser.visible = true;
+            } else {
+                laser = new THREE.Mesh(_sharedLaserGeo, mat);
+                scene.add(laser);
+            }
+            // Scale Y to match beam distance (geo is unit height=1)
+            laser.scale.set(1, distance, 1);
+            laser.position.copy(_tmpLaserMid);
+            laser.lookAt(_tmpLaserEnd);
             laser.rotateX(Math.PI / 2);
-            scene.add(laser);
+            laser.material.opacity = 0.8;
             lasers.push({ mesh: laser, created: Date.now() });
         }
         
@@ -5162,6 +5248,21 @@
             return true;
         }
         
+        // Pre-allocated temp vectors for updateSpaceships() — avoids per-frame GC pressure
+        const _tmpGravAccel = new THREE.Vector3();
+        const _tmpToBody = new THREE.Vector3();
+        const _tmpForward = new THREE.Vector3();
+        const _tmpAngAxis = new THREE.Vector3();
+        const _tmpDQ = new THREE.Quaternion();
+        const _tmpToShip = new THREE.Vector3();
+        const _tmpInvQuat = new THREE.Quaternion();
+        const _tmpLocalPos = new THREE.Vector3();
+        const _tmpVelDiff = new THREE.Vector3();
+        const _tmpDesiredDir = new THREE.Vector3();
+        const _tmpTargetQuat = new THREE.Quaternion();
+        const _tmpDampDir = new THREE.Vector3();
+        const _tmpParticleVel = new THREE.Vector3();
+        
         function updateSpaceships() {
             spaceships.forEach((ship, index) => {
                 if (!ship) return;
@@ -5181,11 +5282,11 @@
                 // Decay shield flash
                 if (data.shieldFlash > 0) data.shieldFlash--;
                 
-                // Update shield bubble visual
-                const shieldChild = ship.getObjectByName('shield');
+                // Update shield bubble visual (cached ref — no tree traversal)
+                const shieldChild = data._shield;
                 if (shieldChild) {
                     shieldChild.material.opacity = data.shieldFlash > 0
-                        ? (data.shieldFlash / 45) * 0.5
+                        ? (data.shieldFlash / 15) * 0.25
                         : 0;
                     shieldChild.visible = data.shieldFlash > 0;
                 }
@@ -5252,24 +5353,24 @@
                     }
                     
                     // Get ship's forward direction
-                    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
+                    _tmpForward.set(0, 0, 1).applyQuaternion(ship.quaternion);
                     
                     particle.position.copy(ship.position);
-                    particle.position.sub(forward.multiplyScalar(2.5));
+                    particle.position.addScaledVector(_tmpForward, -2.5);
                     
                     // Particle initial velocity: inherit ship's velocity, then eject backward
-                    const ejectSpeed = 0.2 + speed * 0.5; // faster ship = faster tail ejection
-                    const particleVelocity = data.velocity.clone();
-                    particleVelocity.sub(forward.multiplyScalar(ejectSpeed));
-                    particleVelocity.x += (Math.random() - 0.5) * 0.1;
-                    particleVelocity.y += (Math.random() - 0.5) * 0.1;
-                    particleVelocity.z += (Math.random() - 0.5) * 0.1;
+                    const ejectSpeed = 0.2 + speed * 0.5;
+                    _tmpParticleVel.copy(data.velocity);
+                    _tmpParticleVel.addScaledVector(_tmpForward, -ejectSpeed);
+                    _tmpParticleVel.x += (Math.random() - 0.5) * 0.1;
+                    _tmpParticleVel.y += (Math.random() - 0.5) * 0.1;
+                    _tmpParticleVel.z += (Math.random() - 0.5) * 0.1;
                     
                     // Tail length (life) proportional to speed (max 1.5, min 0.5)
                     const particleLife = 0.5 + Math.min(1.0, speed * 2.0);
 
                     particle.userData = {
-                        velocity: particleVelocity,
+                        velocity: _tmpParticleVel.clone(),
                         life: particleLife,
                         maxLife: particleLife
                     };
@@ -5279,18 +5380,18 @@
                 
                 // Apply gravity from all asteroids (free — no fuel cost)
                 const G_eff = G_GAME * gravityMultiplier;
-                const gravAccel = new THREE.Vector3(0, 0, 0);
-                asteroids.forEach(asteroid => {
-                    const toBody = asteroid.position.clone().sub(ship.position);
-                    const distSq = toBody.lengthSq();
+                _tmpGravAccel.set(0, 0, 0);
+                for (let ai = 0; ai < asteroids.length; ai++) {
+                    const asteroid = asteroids[ai];
+                    _tmpToBody.copy(asteroid.position).sub(ship.position);
+                    const distSq = _tmpToBody.lengthSq();
                     const dist = Math.sqrt(distSq);
-                    if (dist < 3) return; // avoid singularity at overlap
-                    // F = G * M / r², applied as acceleration (ship mass cancels)
+                    if (dist < 3) continue; // avoid singularity at overlap
                     const strength = G_eff * asteroid.userData.mass / distSq;
-                    gravAccel.add(toBody.normalize().multiplyScalar(strength));
-                });
-                data.gravityMag = gravAccel.length(); // Save for HUD
-                data.velocity.add(gravAccel);
+                    _tmpGravAccel.addScaledVector(_tmpToBody.normalize(), strength);
+                }
+                data.gravityMag = _tmpGravAccel.length();
+                data.velocity.add(_tmpGravAccel);
                 
                 // Apply physics: accelerate along ship's forward axis only
                 // Orientation is driven by angular momentum — torque steers, coasting preserves spin
@@ -5302,22 +5403,21 @@
                 if (!data.neuralBrain) {
                 
                 if (data.isAccelerating && hasFuel) {
-                    const velDiff = data.targetVelocity.clone().sub(data.velocity);
-                    if (velDiff.length() > THRUST * 0.5) {
+                    _tmpVelDiff.copy(data.targetVelocity).sub(data.velocity);
+                    if (_tmpVelDiff.length() > THRUST * 0.5) {
                         // Compute desired orientation
-                        const desiredDir = velDiff.clone().normalize();
-                        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-                            new THREE.Vector3(0, 0, 1), desiredDir
+                        _tmpDesiredDir.copy(_tmpVelDiff).normalize();
+                        _tmpTargetQuat.setFromUnitVectors(
+                            _tmpForward.set(0, 0, 1), _tmpDesiredDir
                         );
                         
                         // Apply torque toward desired orientation
-                        applyingTorque = applyTorqueToward(ship, data, targetQuat);
+                        applyingTorque = applyTorqueToward(ship, data, _tmpTargetQuat);
                         
                         // Thrust along ship's actual forward direction
-                        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
-                        const acceleration = forward.multiplyScalar(THRUST);
+                        _tmpForward.set(0, 0, 1).applyQuaternion(ship.quaternion);
                         
-                        data.velocity.add(acceleration);
+                        data.velocity.addScaledVector(_tmpForward, THRUST);
                         if (data.velocity.length() > MAX_SPEED) {
                             data.velocity.normalize().multiplyScalar(MAX_SPEED);
                         }
@@ -5333,14 +5433,14 @@
                         data.velocity.set(0, 0, 0);
                     } else {
                         // Turn to face velocity direction so we brake properly
-                        const velDir = data.velocity.clone().normalize();
-                        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-                            new THREE.Vector3(0, 0, 1), velDir
+                        _tmpDesiredDir.copy(data.velocity).normalize();
+                        _tmpTargetQuat.setFromUnitVectors(
+                            _tmpForward.set(0, 0, 1), _tmpDesiredDir
                         );
-                        applyingTorque = applyTorqueToward(ship, data, targetQuat);
+                        applyingTorque = applyTorqueToward(ship, data, _tmpTargetQuat);
                         
-                        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
-                        data.velocity.add(forward.multiplyScalar(-THRUST));
+                        _tmpForward.set(0, 0, 1).applyQuaternion(ship.quaternion);
+                        data.velocity.addScaledVector(_tmpForward, -THRUST);
                     }
                     data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
                 }
@@ -5352,8 +5452,8 @@
                     const angSpeed = data.angularVelocity.length();
                     if (angSpeed > 1e-5) {
                         const dampAmount = Math.min(TORQUE, angSpeed);
-                        const dampDir = data.angularVelocity.clone().normalize().multiplyScalar(-dampAmount);
-                        data.angularVelocity.add(dampDir);
+                        _tmpDampDir.copy(data.angularVelocity).normalize().multiplyScalar(-dampAmount);
+                        data.angularVelocity.add(_tmpDampDir);
                         applyingTorque = true; // costs fuel
                     }
                 }
@@ -5361,11 +5461,11 @@
                 } // end if (!data.neuralBrain)
                 
                 // Always apply angular velocity to quaternion (conservation of angular momentum)
-                const angSpeed = data.angularVelocity.length();
-                if (angSpeed > 1e-6) {
-                    const angAxis = data.angularVelocity.clone().normalize();
-                    const dq = new THREE.Quaternion().setFromAxisAngle(angAxis, angSpeed);
-                    ship.quaternion.premultiply(dq);
+                const angSpeed2 = data.angularVelocity.length();
+                if (angSpeed2 > 1e-6) {
+                    _tmpAngAxis.copy(data.angularVelocity).normalize();
+                    _tmpDQ.setFromAxisAngle(_tmpAngAxis, angSpeed2);
+                    ship.quaternion.premultiply(_tmpDQ);
                     ship.quaternion.normalize();
                 }
                 
@@ -5392,10 +5492,10 @@
                 const shipRadius = 2;      // ~200m ship collision radius
                 for (const asteroid of asteroids) {
                     // Vector from asteroid center to ship (world space)
-                    const toShip = ship.position.clone().sub(asteroid.position);
+                    _tmpToShip.copy(ship.position).sub(asteroid.position);
                     // Rotate into asteroid's local frame (rotation only — NOT scale)
-                    const invQuat = asteroid.quaternion.clone().invert();
-                    const localPos = toShip.applyQuaternion(invQuat);
+                    _tmpInvQuat.copy(asteroid.quaternion).invert();
+                    _tmpLocalPos.copy(_tmpToShip).applyQuaternion(_tmpInvQuat);
                     
                     // ── Compound collision shapes (torus + cylinder) ──
                     // Used for complex objects like the station where a single
@@ -5414,7 +5514,7 @@
                                 // circle < tube radius + shipRadius.
                                 const R = shape.R, r = shape.r;
                                 const ox = (shape.cx || 0), oy = (shape.cy || 0), oz = (shape.cz || 0);
-                                const rx = localPos.x - ox, ry = localPos.y - oy, rz = localPos.z - oz;
+                                const rx = _tmpLocalPos.x - ox, ry = _tmpLocalPos.y - oy, rz = _tmpLocalPos.z - oz;
                                 const dxz = Math.sqrt(rx * rx + rz * rz);
                                 // Nearest point on center circle (in XZ plane at radius R)
                                 let nearX, nearZ;
@@ -5455,7 +5555,7 @@
                                 const cR = shape.radius + shipRadius;
                                 const cH = shape.halfHeight + shipRadius;
                                 const ox = (shape.cx || 0), oy = (shape.cy || 0), oz = (shape.cz || 0);
-                                const rx = localPos.x - ox, ry = localPos.y - oy, rz = localPos.z - oz;
+                                const rx = _tmpLocalPos.x - ox, ry = _tmpLocalPos.y - oy, rz = _tmpLocalPos.z - oz;
                                 const dxz = Math.sqrt(rx * rx + rz * rz);
                                 
                                 if (dxz < cR && Math.abs(ry) < cH) {
@@ -5474,13 +5574,13 @@
                                                 bestNormalLocal = new THREE.Vector3(1, 0, 0);
                                             }
                                             bestSurfaceLocal = new THREE.Vector3(
-                                                ox + bestNormalLocal.x * cR, localPos.y, oz + bestNormalLocal.z * cR
+                                                ox + bestNormalLocal.x * cR, _tmpLocalPos.y, oz + bestNormalLocal.z * cR
                                             );
                                         } else {
                                             // Push out through cap
                                             const capSign = ry >= 0 ? 1 : -1;
                                             bestNormalLocal = new THREE.Vector3(0, capSign, 0);
-                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, oy + capSign * cH, localPos.z);
+                                            bestSurfaceLocal = new THREE.Vector3(_tmpLocalPos.x, oy + capSign * cH, _tmpLocalPos.z);
                                         }
                                         hit = true;
                                     }
@@ -5488,9 +5588,9 @@
                             } else if (shape.type === 'box') {
                                 // Axis-aligned box in local frame with center (cx,cy,cz)
                                 // and half-extents (hx,hy,hz)
-                                const relX = localPos.x - shape.cx;
-                                const relY = localPos.y - shape.cy;
-                                const relZ = localPos.z - shape.cz;
+                                const relX = _tmpLocalPos.x - shape.cx;
+                                const relY = _tmpLocalPos.y - shape.cy;
+                                const relZ = _tmpLocalPos.z - shape.cz;
                                 const exX = shape.hx + shipRadius;
                                 const exY = shape.hy + shipRadius;
                                 const exZ = shape.hz + shipRadius;
@@ -5507,15 +5607,15 @@
                                         if (pen === penX) {
                                             const sx = relX >= 0 ? 1 : -1;
                                             bestNormalLocal = new THREE.Vector3(sx, 0, 0);
-                                            bestSurfaceLocal = new THREE.Vector3(shape.cx + sx * exX, localPos.y, localPos.z);
+                                            bestSurfaceLocal = new THREE.Vector3(shape.cx + sx * exX, _tmpLocalPos.y, _tmpLocalPos.z);
                                         } else if (pen === penY) {
                                             const sy = relY >= 0 ? 1 : -1;
                                             bestNormalLocal = new THREE.Vector3(0, sy, 0);
-                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, shape.cy + sy * exY, localPos.z);
+                                            bestSurfaceLocal = new THREE.Vector3(_tmpLocalPos.x, shape.cy + sy * exY, _tmpLocalPos.z);
                                         } else {
                                             const sz = relZ >= 0 ? 1 : -1;
                                             bestNormalLocal = new THREE.Vector3(0, 0, sz);
-                                            bestSurfaceLocal = new THREE.Vector3(localPos.x, localPos.y, shape.cz + sz * exZ);
+                                            bestSurfaceLocal = new THREE.Vector3(_tmpLocalPos.x, _tmpLocalPos.y, shape.cz + sz * exZ);
                                         }
                                         hit = true;
                                     }
@@ -5582,17 +5682,17 @@
                     const sy = (cs ? cs.y : asteroid.scale.y) + shipRadius;
                     const sz = (cs ? cs.z : asteroid.scale.z) + shipRadius;
                     // Ellipsoid test: (x/sx)² + (y/sy)² + (z/sz)² < 1 means inside
-                    const ex = localPos.x / sx;
-                    const ey = localPos.y / sy;
-                    const ez = localPos.z / sz;
+                    const ex = _tmpLocalPos.x / sx;
+                    const ey = _tmpLocalPos.y / sy;
+                    const ez = _tmpLocalPos.z / sz;
                     const ellipDist = ex * ex + ey * ey + ez * ez;
                     
                     if (ellipDist < 1 && ellipDist > 0.0001) {
                         // Ellipsoid surface normal in local frame: gradient (x/sx²,y/sy²,z/sz²)
                         const localNormal = new THREE.Vector3(
-                            localPos.x / (sx * sx),
-                            localPos.y / (sy * sy),
-                            localPos.z / (sz * sz)
+                            _tmpLocalPos.x / (sx * sx),
+                            _tmpLocalPos.y / (sy * sy),
+                            _tmpLocalPos.z / (sz * sz)
                         ).normalize();
                         
                         // Rotate normal back to world space
@@ -5604,7 +5704,7 @@
                             
                             // Push ship to ellipsoid surface
                             const pushFactor = 1 / Math.sqrt(ellipDist);
-                            const surfaceLocal = localPos.clone().multiplyScalar(pushFactor);
+                            const surfaceLocal = _tmpLocalPos.clone().multiplyScalar(pushFactor);
                             ship.position.copy(asteroid.position).add(surfaceLocal.clone().applyQuaternion(asteroid.quaternion));
                             
                             if (impactSpeed > CRASH_SPEED) {
@@ -5719,29 +5819,23 @@
                     ship.position.y = data.baseY + Math.sin(Date.now() * 0.002 + index) * 0.2;
                 }
                 
-                // Nav light pulsation - soft smooth glow
-                const navNames = ['navTop', 'navBottom', 'navRight', 'navLeft', 'navFront', 'navRear'];
+                // Nav light pulsation - soft smooth glow (cached refs — no tree traversal)
                 const time = Date.now() * 0.001;
-                
-                navNames.forEach((name, lightIndex) => {
-                    const mesh = ship.getObjectByName(name);
-                    if (mesh) {
-                        // Each light has unique phase and slow frequency
-                        const phase = index * 0.37 + lightIndex * 0.83;
-                        const freq = 0.3 + lightIndex * 0.07;  // Very slow: 0.3-0.72 Hz
-                        
-                        // Smooth sine wave pulsation
-                        const glow = (Math.sin(time * freq * Math.PI * 2 + phase) + 1) * 0.5;  // 0 to 1
-                        
-                        mesh.material.opacity = 0.1 + glow * 0.5; // lower base opacity for additive glow
+                const cachedNavs = data._navLights;
+                if (cachedNavs) {
+                    for (let li = 0; li < cachedNavs.length; li++) {
+                        const mesh = cachedNavs[li];
+                        if (!mesh) continue;
+                        const phase = index * 0.37 + li * 0.83;
+                        const freq = 0.3 + li * 0.07;
+                        const glow = (Math.sin(time * freq * Math.PI * 2 + phase) + 1) * 0.5;
+                        mesh.material.opacity = 0.1 + glow * 0.5;
                         mesh.scale.setScalar(0.8 + glow * 1.5);
-                        
-                        // Also pulse the inner core opacity slightly
-                        if (mesh.children && mesh.children.length > 0) {
+                        if (mesh.children.length > 0) {
                             mesh.children[0].material.opacity = 0.6 + glow * 0.4;
                         }
                     }
-                });
+                }
             });
             
             // Update engine particles
@@ -6142,13 +6236,15 @@
                     laser.mesh.scale.multiplyScalar(1.1);
                     laser.mesh.material.opacity = Math.max(0, 1 - age / 300);
                     if (age > 300) {
-                        scene.remove(laser.mesh);
+                        laser.mesh.visible = false;
+                        laserPool.push(laser.mesh);
                         lasers.splice(i, 1);
                     }
                 } else {
                     laser.mesh.material.opacity = Math.max(0, 0.8 - age / 200);
                     if (age > 200) {
-                        scene.remove(laser.mesh);
+                        laser.mesh.visible = false;
+                        laserPool.push(laser.mesh);
                         lasers.splice(i, 1);
                     }
                 }
@@ -7357,717 +7453,121 @@
             return targetPos.clone().add(offset);
         }
         
-        // --- Neural ship update for fleet battle (non-training) ---
-        // Runs NN inference for any ship with neuralBrain that is NOT in NEURO training
         function updateNeuralShips() {
-            // Skip if NEURO training is active — those ships are handled by NEURO.update()
             if (NEURO.active) return;
             
-            // Find all neural ships in the scene
-            const neuralShips = spaceships.filter(s => s.userData.neuralBrain && s.parent);
-            if (neuralShips.length === 0) return;
-            
-            // Build SimCore arrays for all ships (both neural and non-neural)
-            // Sync all ships to SimCore first
-            for (const ship of spaceships) {
-                if (!ship.parent) continue;
-                if (!ship.userData.sim) continue;
-                NEURO.syncToSim(ship);
+            // Collect neural ships into reused buffer (no .filter())
+            let nNeural = 0;
+            for (let i = 0; i < spaceships.length; i++) {
+                const s = spaceships[i];
+                if (s.userData.neuralBrain && s.parent) {
+                    if (nNeural < _neuralBuf.length) _neuralBuf[nNeural] = s;
+                    else _neuralBuf.push(s);
+                    nNeural++;
+                }
             }
+            if (nNeural === 0) return;
             
-            const allSimShips = spaceships
-                .filter(s => s.parent && s.userData.sim)
-                .map(s => s.userData.sim);
+            // Sync all ships to SimCore + collect sim states (no .filter().map())
+            let nSim = 0;
+            for (let i = 0; i < spaceships.length; i++) {
+                const s = spaceships[i];
+                if (!s.parent || !s.userData.sim) continue;
+                NEURO.syncToSim(s);
+                if (nSim < _allSimBuf.length) _allSimBuf[nSim] = s.userData.sim;
+                else _allSimBuf.push(s.userData.sim);
+                nSim++;
+            }
+            // Truncate buffer to current length (don't leak stale refs)
+            _allSimBuf.length = nSim;
+            
             const simAsteroids = getSimCoreAsteroids();
             
             // Run NN for each neural ship
-            for (const ship of neuralShips) {
+            for (let ni = 0; ni < nNeural; ni++) {
+                const ship = _neuralBuf[ni];
                 const sim = ship.userData.sim;
-                const inputs = SimCore.buildNNInputs(sim, allSimShips, simAsteroids);
+                const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
                 const outputs = ship.userData.neuralBrain.forward(inputs);
-                const { firedAt } = SimCore.applyNNOutputs(sim, outputs, allSimShips);
+                const { firedAt } = SimCore.applyNNOutputs(sim, outputs, _allSimBuf);
                 
-                // Visual laser beam
+                // Visual laser beam (no .find() — linear scan reusing nothing)
                 if (firedAt) {
-                    const targetThree = spaceships.find(s => s.userData.sim === firedAt);
-                    if (targetThree) {
-                        NEURO.syncFromSim(ship);
-                        fireLaserVisualOnly(ship, targetThree);
+                    for (let j = 0; j < spaceships.length; j++) {
+                        if (spaceships[j].userData.sim === firedAt) {
+                            NEURO.syncFromSim(ship);
+                            fireLaserVisualOnly(ship, spaceships[j]);
+                            break;
+                        }
                     }
                 }
                 
-                // Turret aiming visual — set behavior.target so turrets track
-                const enemies = spaceships.filter(s =>
-                    s !== ship && s.parent && s.userData.team !== ship.userData.team
-                ).sort((a, b) =>
-                    ship.position.distanceTo(a.position) - ship.position.distanceTo(b.position)
-                );
-                if (enemies.length > 0) {
+                // Turret aiming — collect enemies into reused buffer, partial sort for nearest
+                let nEnemies = 0;
+                for (let j = 0; j < spaceships.length; j++) {
+                    const s = spaceships[j];
+                    if (s !== ship && s.parent && s.userData.team !== ship.userData.team) {
+                        if (nEnemies < _enemyBufVis.length) _enemyBufVis[nEnemies] = s;
+                        else _enemyBufVis.push(s);
+                        nEnemies++;
+                    }
+                }
+                if (nEnemies > 0) {
+                    // Sort only populated portion by distance
+                    for (let a = 0; a < nEnemies - 1; a++) {
+                        for (let b = a + 1; b < nEnemies; b++) {
+                            if (ship.position.distanceToSquared(_enemyBufVis[b].position) <
+                                ship.position.distanceToSquared(_enemyBufVis[a].position)) {
+                                const tmp = _enemyBufVis[a];
+                                _enemyBufVis[a] = _enemyBufVis[b];
+                                _enemyBufVis[b] = tmp;
+                            }
+                        }
+                    }
                     const idx = Math.min(
-                        Math.floor((outputs[4] + 1) / 2 * enemies.length),
-                        enemies.length - 1
+                        Math.floor((outputs[4] + 1) / 2 * nEnemies),
+                        nEnemies - 1
                     );
-                    const target = enemies[Math.max(0, idx)];
-                    ship.userData.behavior = { type: 'attack', target };
+                    const target = _enemyBufVis[Math.max(0, idx)];
+                    const beh = ship.userData.behavior;
+                    if (!beh || beh.type !== 'attack' || beh.target !== target) {
+                        ship.userData.behavior = { type: 'attack', target };
+                    }
                 }
             }
             
-            // Sync back + handle kills for neural ships
-            for (const ship of neuralShips) {
+            // Sync back + handle kills (iterate spaceships backwards for safe splice)
+            for (let i = spaceships.length - 1; i >= 0; i--) {
+                const ship = spaceships[i];
+                if (!ship.parent || !ship.userData.sim) continue;
                 const sim = ship.userData.sim;
-                if (!sim.alive && ship.parent) {
-                    ship.userData.neuralSurvived = false;
+                if (!sim.alive) {
+                    if (ship.userData.neuralBrain) ship.userData.neuralSurvived = false;
                     createShipExplosion(ship.position);
                     scene.remove(ship);
                     if (ship.userData.trail && ship.userData.trail.line) {
                         scene.remove(ship.userData.trail.line);
                     }
-                    const idx = spaceships.indexOf(ship);
-                    if (idx >= 0) spaceships.splice(idx, 1);
+                    spaceships.splice(i, 1);
                     removeFromSelection(ship);
                     if (ship === selectedObject) {
                         selectedObject = null;
                         if (spaceships.length > 0) selectShip(0);
                     }
-                } else if (ship.parent) {
+                } else if (ship.userData.neuralBrain) {
                     NEURO.syncFromSim(ship);
-                }
-            }
-            
-            // Also sync non-neural ships that have been damaged by neural fire
-            for (const ship of spaceships) {
-                if (!ship.parent || !ship.userData.sim || ship.userData.neuralBrain) continue;
-                const sim = ship.userData.sim;
-                if (!sim.alive && ship.parent) {
-                    // Non-neural ship killed by neural fire
-                    createShipExplosion(ship.position);
-                    scene.remove(ship);
-                    if (ship.userData.trail && ship.userData.trail.line) {
-                        scene.remove(ship.userData.trail.line);
-                    }
-                    const idx = spaceships.indexOf(ship);
-                    if (idx >= 0) spaceships.splice(idx, 1);
-                    removeFromSelection(ship);
-                    if (ship === selectedObject) {
-                        selectedObject = null;
-                        if (spaceships.length > 0) selectShip(0);
-                    }
                 } else {
-                    // Sync damage/battery changes back to Three.js
+                    // Non-neural: sync damage/battery changes
                     ship.userData.hp = sim.hp;
                     ship.userData.battery = sim.battery;
                     ship.userData.shieldFlash = sim.shieldFlash;
                 }
             }
-            
-            // Note: SimCore physics (position/rotation update) is handled by updateSpaceships()
-            // which runs for all ships. Neural ships skip the thrust/brake section there
-            // but still get angular velocity → quaternion and position += velocity.
         }
         
         function updateShipBehaviors() {
-            const BEHAVIOR_SPEED = 0.15;
-            const ARRIVAL_THRESHOLD = 2;
-            const EFFECTIVE_BRAKE = THRUST;  // braking is same engine as acceleration
-            
-            // First process AI for ships that don't have user orders
-            // Build a map of how many friendlies are attacking each enemy (for focus fire)
-            const attackCounts = new Map(); // target -> count of ships attacking it
-            const incomingEnemies = new Map(); // ship -> count of enemy ships attacking it
-            spaceships.forEach(s => {
-                const b = s.userData.behavior;
-                if (b && b.type === 'attack' && b.target && b.target.parent) {
-                    attackCounts.set(b.target, (attackCounts.get(b.target) || 0) + 1);
-                    if (s.userData.team !== b.target.userData.team) {
-                        incomingEnemies.set(b.target, (incomingEnemies.get(b.target) || 0) + 1);
-                    }
-                }
-            });
-            
-            spaceships.forEach(ship => {
-                const data = ship.userData;
-                // Neural ships are controlled by NEURO.update() — skip behavior engine
-                if (data.neuralBrain) return;
-                // If ship doesn't have a specific manual order, let it fight
-                if (!data.behavior || data.behavior.type === 'orbit' || data.behavior.type === 'idle' || data.behavior.type === 'attack') {
-                    // Find best target: prefer enemies already under attack by teammates (focus fire)
-                    let bestTarget = null;
-                    let bestScore = -Infinity;
-                    
-                    spaceships.forEach(otherShip => {
-                        if (otherShip.userData.team !== data.team) {
-                            const d = ship.position.distanceTo(otherShip.position);
-                            const distKm = d * KM_PER_UNIT;
-                            if (distKm > 200) return; // out of engagement range
-                            
-                            // Score: prefer targets already being attacked, closer, and lower HP
-                            const teammates = attackCounts.get(otherShip) || 0;
-                            const hpPct = (otherShip.userData.hp || 100) / (otherShip.userData.maxHp || 100);
-                            const score = teammates * 50 // heavily prefer focus fire
-                                - d * 0.5              // prefer closer
-                                - hpPct * 30;          // prefer wounded
-                            
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestTarget = otherShip;
-                            }
-                        }
-                    });
-                    
-                    if (bestTarget) {
-                        data.behavior = {
-                            type: 'attack',
-                            target: bestTarget
-                        };
-                        attackCounts.set(bestTarget, (attackCounts.get(bestTarget) || 0) + 1);
-                    } else if (!data.behavior) {
-                        // No enemy in range — find closest enemy and drift towards them
-                        let nearestEnemy = null;
-                        let nearestDist = Infinity;
-                        spaceships.forEach(otherShip => {
-                            if (otherShip.userData.team !== data.team) {
-                                const d = ship.position.distanceTo(otherShip.position);
-                                if (d < nearestDist) { nearestDist = d; nearestEnemy = otherShip; }
-                            }
-                        });
-                        if (nearestEnemy) {
-                            data.behavior = {
-                                type: 'move',
-                                target: nearestEnemy.position.clone()
-                            };
-                        }
-                    }
-                }
-            });
-            
-            spaceships.forEach(ship => {
-                const data = ship.userData;
-                const speed = data.velocity.length();
-                const fuelPct = data.fuel / data.maxFuel;
-                
-                // ── AUTONOMOUS: fuel self-preservation ──
-                // Disabled during combat — ships fight to the last drop
-                const inCombat = data.behavior && data.behavior.type === 'attack';
-                // Critical fuel (< 5%): cut all thrust, drift only
-                if (!inCombat && fuelPct < 0.05 && data.fuel > 0) {
-                    if (data.behavior && data.behavior.type !== 'fuelCritical' && data.behavior.type !== 'landed') {
-                        shipReport(data, 'fuelCritical', 'FUEL CRITICAL — cutting engines, drifting');
-                        data.behavior = { type: 'fuelCritical' };
-                    }
-                }
-                // Low fuel (< 20%): seek orbit around nearest heavy asteroid (mass >= 1e9)
-                else if (!inCombat && fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake' && data.behavior.type !== 'landed') {
-                    // Find nearest heavy asteroid
-                    let nearestHeavy = null, nearestDist = Infinity;
-                    asteroids.forEach(a => {
-                        if (a.userData.mass < 1e9) return;
-                        const d = a.position.distanceTo(ship.position);
-                        if (d < nearestDist) { nearestDist = d; nearestHeavy = a; }
-                    });
-                    if (nearestHeavy) {
-                        const avgScale = (nearestHeavy.scale.x + nearestHeavy.scale.y + nearestHeavy.scale.z) / 3;
-                        const orbitRadius = avgScale * 1.2;
-                        const astName = nearestHeavy.userData.name || 'massive asteroid';
-                        shipReport(data, 'fuelLow', `Fuel at ${Math.round(fuelPct * 100)}% — breaking off, seeking orbit around ${astName}`);
-                        data.behavior = {
-                            type: 'orbit',
-                            body: nearestHeavy,
-                            radius: orbitRadius,
-                            phase: 'approach',
-                            _autoFuel: true  // flag: this was an autonomous decision
-                        };
-                    }
-                }
-                
-                // ── AUTONOMOUS: predictive collision avoidance ──
-                if (speed > 0.02 && data.behavior && data.behavior.type !== 'fuelCritical') {
-                    const lookAhead = Math.max(30, speed * 60); // ~1 second of travel at 60fps, min 30 units
-                    const futurePos = ship.position.clone().add(data.velocity.clone().normalize().multiplyScalar(lookAhead));
-                    const safetyMargin = 5; // 500m buffer
-                    for (const asteroid of asteroids) {
-                        const toFuture = futurePos.clone().sub(asteroid.position);
-                        const cs = asteroid.userData.collisionSize;
-                        const maxScale = cs
-                            ? Math.max(cs.x, cs.y, cs.z)
-                            : Math.max(asteroid.scale.x, asteroid.scale.y, asteroid.scale.z);
-                        
-                        // Quick rejection: skip if future pos is far from bounding sphere
-                        if (toFuture.length() > maxScale + safetyMargin + lookAhead) continue;
-                        
-                        // Check compound shapes if available (station, complex objects)
-                        const shapes = asteroid.userData.collisionShapes;
-                        let threatened = false;
-                        let threatNormalWorld = null; // direction to steer away
-                        
-                        if (shapes && shapes.length > 0) {
-                            // Transform future pos into asteroid's local frame
-                            const invQuat = asteroid.quaternion.clone().invert();
-                            const localFuture = futurePos.clone().sub(asteroid.position).applyQuaternion(invQuat);
-                            // Also check current pos (in case already very close)
-                            const localCurrent = ship.position.clone().sub(asteroid.position).applyQuaternion(invQuat);
-                            
-                            let bestDist = Infinity;
-                            let bestNormalLocal = null;
-                            
-                            for (const shape of shapes) {
-                                // Check both future and current positions
-                                for (const lp of [localFuture, localCurrent]) {
-                                    if (shape.type === 'torus') {
-                                        const R = shape.R, r = shape.r;
-                                        const ox = shape.cx || 0, oy = shape.cy || 0, oz = shape.cz || 0;
-                                        const rx = lp.x - ox, ry = lp.y - oy, rz = lp.z - oz;
-                                        const dxz = Math.sqrt(rx * rx + rz * rz);
-                                        let nearX, nearZ;
-                                        if (dxz > 0.001) { nearX = rx * R / dxz; nearZ = rz * R / dxz; }
-                                        else { nearX = R; nearZ = 0; }
-                                        const dx = rx - nearX, dy = ry, dz = rz - nearZ;
-                                        const distToTube = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                                        const threshold = r + safetyMargin;
-                                        if (distToTube < threshold && distToTube < bestDist) {
-                                            bestDist = distToTube;
-                                            if (distToTube > 0.001) {
-                                                bestNormalLocal = new THREE.Vector3(dx / distToTube, dy / distToTube, dz / distToTube);
-                                            } else {
-                                                bestNormalLocal = new THREE.Vector3(0, 1, 0);
-                                            }
-                                        }
-                                    } else if (shape.type === 'cylinder') {
-                                        const cR = shape.radius + safetyMargin;
-                                        const cH = shape.halfHeight + safetyMargin;
-                                        const ox = shape.cx || 0, oy = shape.cy || 0, oz = shape.cz || 0;
-                                        const rx = lp.x - ox, ry = lp.y - oy, rz = lp.z - oz;
-                                        const dxz = Math.sqrt(rx * rx + rz * rz);
-                                        if (dxz < cR && Math.abs(ry) < cH) {
-                                            const penRadial = cR - dxz;
-                                            const penAxial = cH - Math.abs(ry);
-                                            const dist = Math.min(penRadial, penAxial);
-                                            if (dist < bestDist) {
-                                                bestDist = dist;
-                                                if (penRadial < penAxial) {
-                                                    bestNormalLocal = dxz > 0.001
-                                                        ? new THREE.Vector3(rx / dxz, 0, rz / dxz)
-                                                        : new THREE.Vector3(1, 0, 0);
-                                                } else {
-                                                    bestNormalLocal = new THREE.Vector3(0, ry >= 0 ? 1 : -1, 0);
-                                                }
-                                            }
-                                        }
-                                    } else if (shape.type === 'box') {
-                                        const relX = lp.x - shape.cx, relY = lp.y - shape.cy, relZ = lp.z - shape.cz;
-                                        const exX = shape.hx + safetyMargin, exY = shape.hy + safetyMargin, exZ = shape.hz + safetyMargin;
-                                        if (Math.abs(relX) < exX && Math.abs(relY) < exY && Math.abs(relZ) < exZ) {
-                                            const pen = Math.min(exX - Math.abs(relX), exY - Math.abs(relY), exZ - Math.abs(relZ));
-                                            if (pen < bestDist) {
-                                                bestDist = pen;
-                                                const penX = exX - Math.abs(relX), penY = exY - Math.abs(relY), penZ = exZ - Math.abs(relZ);
-                                                const minPen = Math.min(penX, penY, penZ);
-                                                if (minPen === penX) bestNormalLocal = new THREE.Vector3(relX >= 0 ? 1 : -1, 0, 0);
-                                                else if (minPen === penY) bestNormalLocal = new THREE.Vector3(0, relY >= 0 ? 1 : -1, 0);
-                                                else bestNormalLocal = new THREE.Vector3(0, 0, relZ >= 0 ? 1 : -1);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            if (bestNormalLocal) {
-                                threatened = true;
-                                threatNormalWorld = bestNormalLocal.applyQuaternion(asteroid.quaternion).normalize();
-                            }
-                        } else {
-                            // Simple bounding sphere check (regular asteroids)
-                            const dangerRadius = maxScale + safetyMargin;
-                            if (toFuture.length() < dangerRadius) {
-                                threatened = true;
-                                // Normal: away from asteroid center
-                                const toShip = ship.position.clone().sub(asteroid.position);
-                                threatNormalWorld = toShip.length() > 0.01 ? toShip.normalize() : new THREE.Vector3(0, 1, 0);
-                            }
-                        }
-                        
-                        if (threatened && threatNormalWorld) {
-                            // Steer along the escape normal
-                            const avoidVel = data.velocity.clone().add(threatNormalWorld.multiplyScalar(THRUST * 5));
-                            avoidVel.normalize().multiplyScalar(speed);
-                            data.targetVelocity.copy(avoidVel);
-                            data.isAccelerating = true;
-                            const astName = asteroid.userData.name || 'asteroid';
-                            shipReport(data, 'avoidance', `Collision course — evading ${astName}`);
-                            break;
-                        }
-                    }
-                }
-                
-                // ── AUTONOMOUS: ship-to-ship separation ──
-                // Always-on repulsion to prevent clumping. Ships steer away from each other
-                // when closer than SEPARATION_RADIUS. Stronger as distance decreases.
-                const SEPARATION_RADIUS = 8;   // units — ships are ~3 units long
-                const SEPARATION_FORCE = THRUST * 3;
-                if (data.behavior && data.behavior.type !== 'fuelCritical') {
-                    const sepAccum = new THREE.Vector3();
-                    let sepCount = 0;
-                    for (const other of spaceships) {
-                        if (other === ship) continue;
-                        const toSelf = ship.position.clone().sub(other.position);
-                        const d = toSelf.length();
-                        if (d < SEPARATION_RADIUS && d > 0.01) {
-                            // Inverse-linear repulsion: stronger when closer
-                            const strength = (SEPARATION_RADIUS - d) / SEPARATION_RADIUS;
-                            sepAccum.add(toSelf.normalize().multiplyScalar(strength));
-                            sepCount++;
-                        }
-                    }
-                    if (sepCount > 0) {
-                        sepAccum.normalize().multiplyScalar(SEPARATION_FORCE);
-                        // Blend separation into current target velocity
-                        data.targetVelocity.add(sepAccum);
-                        data.isAccelerating = true;
-                    }
-                }
-                
-                if (!data.behavior) return;
-                
-                const b = data.behavior;
-                // Distance needed to brake from current speed to zero
-                const brakeDist = speed > 0.01 ? (speed * speed) / (2 * EFFECTIVE_BRAKE) + ARRIVAL_THRESHOLD : 0;
-                
-                switch (b.type) {
-                    case 'fuelCritical': {
-                        // Do nothing — no thrust, just drift. Physics preserves velocity.
-                        break;
-                    }
-                    case 'move': {
-                        const formationTarget = computeFormationOffset(ship, b.target);
-                        const dir = formationTarget.clone().sub(ship.position);
-                        const dist = dir.length();
-                        if (dist < ARRIVAL_THRESHOLD && speed < 0.02) {
-                            // Arrived — physics brought us to rest, clear behavior
-                            data.behavior = null;
-                        } else if (dist > brakeDist) {
-                            // Accelerate toward target
-                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
-                            data.isAccelerating = true;
-                        } else {
-                            // Close enough — brake to stop
-                            data.isBraking = true;
-                        }
-                        break;
-                    }
-                    case 'brake': {
-                        if (speed < 0.02) {
-                            // Physics brought us to rest, clear behavior
-                            data.behavior = null;
-                        } else {
-                            data.isBraking = true;
-                        }
-                        break;
-                    }
-                    case 'orbit': {
-                        // Real orbital injection: approach target orbit altitude,
-                        // thrust to reach circular orbit velocity, then coast on gravity.
-                        const G_eff = G_GAME * gravityMultiplier;
-                        const toBody = b.body.position.clone().sub(ship.position);
-                        const distToBody = toBody.length();
-                        const orbitR = b.radius;
-                        
-                        if (b.phase === 'approach') {
-                            // Fly toward a point at orbit radius from the body
-                            // Pick approach point: closest point on orbit circle to current position
-                            const radialDir = ship.position.clone().sub(b.body.position);
-                            radialDir.y = 0; // keep orbit in XZ plane
-                            if (radialDir.length() < 0.1) radialDir.set(1, 0, 0);
-                            radialDir.normalize();
-                            const approachTarget = b.body.position.clone().add(radialDir.multiplyScalar(orbitR));
-                            const toTarget = approachTarget.clone().sub(ship.position);
-                            const distToTarget = toTarget.length();
-                            
-                            if (distToTarget < ARRIVAL_THRESHOLD + brakeDist && distToTarget < 5) {
-                                // Close enough to orbit altitude — switch to injection
-                                b.phase = 'inject';
-                            } else if (distToTarget < brakeDist + 2) {
-                                // Need to brake to arrive at orbit altitude
-                                data.isBraking = true;
-                            } else {
-                                // Accelerate toward orbit altitude
-                                data.targetVelocity.copy(toTarget.normalize().multiplyScalar(BEHAVIOR_SPEED));
-                                data.isAccelerating = true;
-                            }
-                        } else if (b.phase === 'inject') {
-                            // Compute circular orbit velocity: v = sqrt(G_eff * M / r)
-                            const orbitalSpeed = Math.sqrt(G_eff * b.body.userData.mass / distToBody);
-                            
-                            // Tangent direction: perpendicular to radial, in XZ plane
-                            const radial = ship.position.clone().sub(b.body.position).normalize();
-                            const tangent = new THREE.Vector3(-radial.z, 0, radial.x); // 90° in XZ
-                            const targetVel = tangent.multiplyScalar(orbitalSpeed);
-                            
-                            // How close is our velocity to the target orbital velocity?
-                            const velError = targetVel.clone().sub(data.velocity);
-                            
-                            if (velError.length() < 0.005 || orbitalSpeed < 0.005) {
-                                // Close enough — cut engines, enter freefall
-                                b.phase = 'freefall';
-                            } else if (orbitalSpeed > MAX_SPEED) {
-                                // Orbital speed exceeds our max — can't achieve stable orbit here
-                                // Fall through to freefall anyway, we'll be in an elliptical orbit
-                                b.phase = 'freefall';
-                            } else {
-                                // Thrust toward orbital velocity
-                                data.targetVelocity.copy(targetVel);
-                                data.isAccelerating = true;
-                            }
-                        } else {
-                            // freefall — engines off, gravity does the work
-                            // Just monitor: if we drift too far, re-inject
-                            const driftRatio = distToBody / orbitR;
-                            if (driftRatio > 2.0 || driftRatio < 0.3) {
-                                // Orbit has decayed or escaped — re-approach
-                                b.phase = 'approach';
-                            }
-                            // Otherwise: do nothing. Pure gravity orbit.
-                        }
-                        break;
-                    }
-                    case 'patrol': {
-                        const target = b.goingToB ? b.pointB : b.pointA;
-                        const dir = target.clone().sub(ship.position);
-                        const dist = dir.length();
-                        if (dist < ARRIVAL_THRESHOLD && speed < 0.02) {
-                            // At waypoint, flip direction
-                            b.goingToB = !b.goingToB;
-                        } else if (dist > brakeDist) {
-                            // Accelerate toward waypoint
-                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
-                            data.isAccelerating = true;
-                        } else {
-                            // Approaching waypoint — brake
-                            data.isBraking = true;
-                        }
-                        break;
-                    }
-                    case 'follow': {
-                        let targetPos;
-                        if (b.followCrosshair) {
-                            targetPos = cursorPos3D.clone();
-                        } else if (b.followCamera) {
-                            targetPos = cameraPosition.clone();
-                        } else if (b.targetShip) {
-                            targetPos = b.targetShip.position.clone();
-                        } else {
-                            data.behavior = null; break;
-                        }
-                        const formationTarget = computeFormationOffset(ship, targetPos);
-                        const dir = formationTarget.clone().sub(ship.position);
-                        const dist = dir.length();
-                        if (dist > b.distance + brakeDist) {
-                            // Too far — accelerate toward target
-                            data.targetVelocity.copy(dir.normalize().multiplyScalar(BEHAVIOR_SPEED));
-                            data.isAccelerating = true;
-                        } else if (dist < b.distance && speed > 0.02) {
-                            // Within distance but still moving — brake
-                            data.isBraking = true;
-                        }
-                        // else: within distance and slow enough, coast
-                        break;
-                    }
-                    case 'attack': {
-                        if (!b.target || !b.target.parent) {
-                            data.behavior = null; // target destroyed
-                            break;
-                        }
-                        
-                        const toTarget = b.target.position.clone().sub(ship.position);
-                        const dist = toTarget.length();
-                        const batteryPct = data.battery / data.maxBattery;
-                        const targetData = b.target.userData;
-                        const targetVel = targetData.velocity || new THREE.Vector3();
-                        
-                        // Predict where both ships will be in ~1 second (60 frames)
-                        const LOOKAHEAD = 60;
-                        const futureTargetPos = b.target.position.clone().addScaledVector(targetVel, LOOKAHEAD);
-                        const futureMyPos = ship.position.clone().addScaledVector(data.velocity, LOOKAHEAD);
-                        const futureToTarget = futureTargetPos.clone().sub(futureMyPos);
-                        const futureDist = futureToTarget.length();
-                        
-                        // Tactical situation
-                        const enemiesOnMe = incomingEnemies.get(ship) || 0;
-                        const alliesOnTarget = attackCounts.get(b.target) || 0;
-                        
-                        // Flee decision with hysteresis
-                        const lowEnergy = batteryPct < 0.15;
-                        const beingFocused = enemiesOnMe >= 2;
-                        const shouldFlee = lowEnergy || beingFocused;
-                        const shouldStopFleeing = batteryPct >= 0.30 && enemiesOnMe <= 1;
-                        
-                        if (b.fleeing && shouldStopFleeing) {
-                            b.fleeing = false;
-                        } else if (shouldFlee) {
-                            b.fleeing = true;
-                        }
-                        
-                        if (b.fleeing) {
-                            // Predict: will the nearest threat close on me?
-                            // Find the closest enemy that's attacking me
-                            let nearestChaser = b.target;
-                            let nearestChaserDist = dist;
-                            for (const other of spaceships) {
-                                if (other.userData.team === data.team) continue;
-                                const ob = other.userData.behavior;
-                                if (ob && ob.type === 'attack' && ob.target === ship) {
-                                    const d = other.position.distanceTo(ship.position);
-                                    if (d < nearestChaserDist) {
-                                        nearestChaserDist = d;
-                                        nearestChaser = other;
-                                    }
-                                }
-                            }
-                            const chaserVel = nearestChaser.userData.velocity || new THREE.Vector3();
-                            const futureChaserPos = nearestChaser.position.clone().addScaledVector(chaserVel, LOOKAHEAD);
-                            const futureFleePos = ship.position.clone().addScaledVector(data.velocity, LOOKAHEAD);
-                            const futureFleeDist = futureChaserPos.distanceTo(futureFleePos);
-                            const SAFE_DIST = 100;
-                            
-                            if (futureFleeDist < SAFE_DIST) {
-                                // Chaser is closing — run away from their predicted position
-                                const awayDir = futureFleePos.clone().sub(futureChaserPos).normalize();
-                                data.targetVelocity.copy(awayDir.multiplyScalar(BEHAVIOR_SPEED));
-                                data.isAccelerating = true;
-                            } else {
-                                // Chaser is falling behind or veering off — coast and save fuel
-                                const velDiff = chaserVel.clone().sub(data.velocity).length();
-                                if (velDiff > THRUST * 3) {
-                                    // Still some relative velocity — match to maintain gap
-                                    data.targetVelocity.copy(data.velocity);
-                                }
-                                // else: already drifting apart, coast
-                            }
-                            // Still track turrets while fleeing (rear defense)
-                            if (dist < 80) {
-                                for (let ti = 0; ti < 2; ti++) {
-                                    const t = ship.getObjectByName('turret' + ti);
-                                    const h = t ? t.getObjectByName('head') : null;
-                                    if (h) {
-                                        const twp = new THREE.Vector3();
-                                        t.getWorldPosition(twp);
-                                        const ttl = b.target.position.clone().sub(twp);
-                                        ship.worldToLocal(ttl.add(ship.position));
-                                        ttl.sub(t.position).normalize();
-                                        const tq = new THREE.Quaternion().setFromUnitVectors(
-                                            new THREE.Vector3(0, 0, -1), ttl
-                                        );
-                                        h.quaternion.slerp(tq, 0.15);
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        
-                        // Engagement ranges — dynamic based on fuel, tactical advantage, enemy state
-                        const fuelPct = data.fuel / data.maxFuel;
-                        const enemyBatteryPct = targetData ? targetData.battery / targetData.maxBattery : 1;
-                        const overnumbering = alliesOnTarget > enemiesOnMe + 1;
-                        const enemyWeak = enemyBatteryPct < 0.15;
-                        
-                        // Base ranges: aggressive when overnumbering/enemy weak, wider when conserving
-                        const basePursue = (enemyWeak || overnumbering) ? 30 : 50;
-                        const baseTooClose = (enemyWeak || overnumbering) ? 15 : 25;
-                        // Low fuel widens the dead band — accept worse positioning to save fuel
-                        // fuelPct 1.0 → multiplier 1.0, fuelPct 0.0 → multiplier 2.0
-                        const fuelStretch = 1 + (1 - fuelPct);
-                        const pursueRange = basePursue * fuelStretch;
-                        const tooCloseRange = baseTooClose / fuelStretch;
-                        
-                        if (futureDist > pursueRange) {
-                            // Will drift out of range — compute intercept velocity
-                            // Aim for ideal range midpoint, arriving in LOOKAHEAD frames
-                            const idealDist = (pursueRange + tooCloseRange) / 2;
-                            const interceptPos = futureTargetPos.clone().sub(
-                                futureToTarget.clone().normalize().multiplyScalar(idealDist)
-                            );
-                            const neededVel = interceptPos.sub(ship.position).divideScalar(LOOKAHEAD);
-                            // Cap at BEHAVIOR_SPEED
-                            if (neededVel.length() > BEHAVIOR_SPEED) {
-                                neededVel.normalize().multiplyScalar(BEHAVIOR_SPEED);
-                            }
-                            data.targetVelocity.copy(neededVel);
-                            data.isAccelerating = true;
-                        } else if (futureDist < tooCloseRange) {
-                            // Will drift too close — back away from predicted position
-                            data.targetVelocity.copy(futureToTarget.normalize().negate().multiplyScalar(BEHAVIOR_SPEED * 0.5));
-                            data.isAccelerating = true;
-                        } else {
-                            // Predicted distance is in range — match target velocity and coast
-                            data.targetVelocity.copy(targetVel);
-                            const velDiff = targetVel.clone().sub(data.velocity).length();
-                            if (velDiff > THRUST * 3) {
-                                data.isAccelerating = true;
-                            }
-                            // else: velocity matched, coast — no fuel burn
-                        }
-                        
-                        // Fire logic - must be within 80 units (8km) to fire
-                        if (dist < 80) {
-                            // Turrets independently track the target
-                            const toTarget2 = b.target.position.clone().sub(ship.position).normalize();
-                            
-                            // Pick the turret that will fire next
-                            const nextTurret = data.nextTurret || 0;
-                            const turret = ship.getObjectByName('turret' + nextTurret);
-                            const head = turret ? turret.getObjectByName('head') : null;
-                            
-                            let turretAimed = false;
-                            if (head) {
-                                // Get target direction in turret's local space
-                                const turretWorldPos = new THREE.Vector3();
-                                turret.getWorldPosition(turretWorldPos);
-                                const toTargetLocal = b.target.position.clone().sub(turretWorldPos);
-                                ship.worldToLocal(toTargetLocal.add(ship.position));
-                                // Offset for turret's position within the ship
-                                toTargetLocal.sub(turret.position).normalize();
-                                
-                                const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-                                    new THREE.Vector3(0, 0, -1), toTargetLocal
-                                );
-                                head.quaternion.slerp(targetQuat, 0.15);
-                                
-                                // Check if turret is aimed (within ~10°)
-                                const turretForward = new THREE.Vector3(0, 0, -1).applyQuaternion(head.quaternion);
-                                turretAimed = turretForward.dot(toTargetLocal) > 0.985;
-                            }
-                            
-                            // Also rotate the other turret toward target (visual only)
-                            const otherTurret = ship.getObjectByName('turret' + (nextTurret === 0 ? 1 : 0));
-                            const otherHead = otherTurret ? otherTurret.getObjectByName('head') : null;
-                            if (otherHead) {
-                                const turretWorldPos = new THREE.Vector3();
-                                otherTurret.getWorldPosition(turretWorldPos);
-                                const toTargetLocal = b.target.position.clone().sub(turretWorldPos);
-                                ship.worldToLocal(toTargetLocal.add(ship.position));
-                                toTargetLocal.sub(otherTurret.position).normalize();
-                                const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-                                    new THREE.Vector3(0, 0, -1), toTargetLocal
-                                );
-                                otherHead.quaternion.slerp(targetQuat, 0.15);
-                            }
-                            
-                            // Fire when turret is aimed at target
-                            if (turretAimed && (!b.lastFired || Date.now() - b.lastFired > 1000)) {
-                                if (data.weapons >= 8) {
-                                    fireLaser(ship, b.target);
-                                    b.lastFired = Date.now();
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    case 'landed': {
-                        // Ship is on asteroid surface — do nothing here.
-                        // Physics engine handles surface attachment.
-                        // Any new command (move/orbit/etc.) will overwrite behavior → liftoff.
-                        break;
-                    }
-                }
-            });
+            // All ships are neural-controlled — behavior engine is not needed.
+            // Neural ships are driven by updateNeuralShips() / NEURO.update().
         }
         
         // ===== LLM INTEGRATION =====

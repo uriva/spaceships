@@ -76,6 +76,22 @@
         z + qw * tz + qx * ty - qy * tx,
       ];
     },
+    // Rotate (vx,vy,vz) by quaternion q, write result into out[3]
+    applyToVec3Into: (q, vx, vy, vz, out) => {
+      const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+      const tx = 2 * (qy * vz - qz * vy);
+      const ty = 2 * (qz * vx - qx * vz);
+      const tz = 2 * (qx * vy - qy * vx);
+      out[0] = vx + qw * tx + qy * tz - qz * ty;
+      out[1] = vy + qw * ty + qz * tx - qx * tz;
+      out[2] = vz + qw * tz + qx * ty - qy * tx;
+    },
+    // Invert quaternion, write into pre-allocated out[4]
+    invertInto: (q, out) => {
+      const d = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+      if (d > 1e-12) { out[0] = -q[0]/d; out[1] = -q[1]/d; out[2] = -q[2]/d; out[3] = q[3]/d; }
+      else { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; }
+    },
     // Set quaternion from random values and normalize — for random orientation
     setRandomMut: (q) => {
       q[0] = Math.random() - 0.5;
@@ -113,10 +129,13 @@
       this.layers = layers;
       this.weights = [];
       this.biases = [];
+      this._bufs = [];   // pre-allocated activation buffers per layer
       for (let i = 0; i < layers.length - 1; i++) {
         this.weights.push(new Float64Array(layers[i] * layers[i + 1]));
         this.biases.push(new Float64Array(layers[i + 1]));
+        this._bufs.push(new Float64Array(layers[i + 1]));
       }
+      this._inputBuf = new Float64Array(layers[0]);
     }
     get paramCount() {
       let n = 0;
@@ -144,11 +163,14 @@
       return g;
     }
     forward(inputs) {
-      let activation = Float64Array.from(inputs);
+      // Copy inputs into pre-allocated buffer (avoid Float64Array.from allocation)
+      const inp = this._inputBuf;
+      for (let k = 0; k < inp.length; k++) inp[k] = inputs[k];
+      let activation = inp;
       for (let i = 0; i < this.layers.length - 1; i++) {
         const nIn = this.layers[i];
         const nOut = this.layers[i + 1];
-        const next = new Float64Array(nOut);
+        const next = this._bufs[i]; // pre-allocated
         for (let o = 0; o < nOut; o++) {
           let sum = this.biases[i][o];
           for (let j = 0; j < nIn; j++) {
@@ -242,8 +264,18 @@
   // ██  Build 78-element NN input vector
   // ══════════════════════════════════════════════════════════════
   // 8 own state + 54 (6 ships × 9) + 16 (4 asteroids × 4) = 78
+  // Pre-allocated scratch buffers to avoid per-call allocations
+  const _nnInputs = new Float64Array(78);
+  const _fwdTmp = [0, 0, 0];
+  const _relPosTmp = [0, 0, 0];
+  const _relVelTmp = [0, 0, 0];
+  const _localTmp = [0, 0, 0];
+  const _invQuatTmp = [0, 0, 0, 1];
+  const _othersBuf = []; // reused sort array; entries are { ship, dist, r0, r1, r2 }
+
   function buildNNInputs(ship, allShips, asteroids) {
-    const inputs = new Float64Array(78);
+    const inputs = _nnInputs;
+    inputs.fill(0);
 
     // Own state (8 inputs)
     inputs[0] = ship.angVel[0];
@@ -254,63 +286,98 @@
     inputs[3] = speed / PHYSICS.MAX_SPEED;
 
     // forward · velocity (alignment)
-    const fwd = Q.applyToVec3(ship.quat, [0, 0, 1]);
-    inputs[4] = speed > 1e-4 ? V3.dot(fwd, V3.normalize(ship.vel)) : 0;
+    Q.applyToVec3Into(ship.quat, 0, 0, 1, _fwdTmp);
+    inputs[4] = speed > 1e-4 ? V3.dot(_fwdTmp, V3.normalize(ship.vel)) : 0;
 
     inputs[5] = ship.battery / ship.maxBattery;
     inputs[6] = ship.hp / ship.maxHp;
     inputs[7] = ship.fuel / ship.maxFuel;
 
     // Nearest 6 visible ships (9 each = 54 inputs)
-    const invQuat = Q.invert(ship.quat);
-    const others = [];
-    for (const other of allShips) {
+    Q.invertInto(ship.quat, _invQuatTmp);
+    let nOthers = 0;
+    for (let si = 0; si < allShips.length; si++) {
+      const other = allShips[si];
       if (other === ship || !other.alive) continue;
-      const relPos = V3.sub(other.pos, ship.pos);
-      const dist = V3.length(relPos);
-      others.push({ ship: other, dist, relPos });
+      const r0 = other.pos[0] - ship.pos[0];
+      const r1 = other.pos[1] - ship.pos[1];
+      const r2 = other.pos[2] - ship.pos[2];
+      const dist = Math.sqrt(r0 * r0 + r1 * r1 + r2 * r2);
+      if (nOthers < _othersBuf.length) {
+        const e = _othersBuf[nOthers];
+        e.ship = other; e.dist = dist; e.r0 = r0; e.r1 = r1; e.r2 = r2;
+      } else {
+        _othersBuf.push({ ship: other, dist, r0, r1, r2 });
+      }
+      nOthers++;
     }
-    others.sort((a, b) => a.dist - b.dist);
+    // Sort only the populated portion
+    const sortSlice = _othersBuf.length > nOthers ? _othersBuf.slice(0, nOthers) : _othersBuf;
+    if (sortSlice.length !== nOthers) { sortSlice.length = nOthers; }
+    // In-place partial sort: we only need top-6, but full sort is fine for <=20 ships
+    for (let i = 0; i < nOthers - 1; i++) {
+      for (let j = i + 1; j < nOthers; j++) {
+        if (_othersBuf[j].dist < _othersBuf[i].dist) {
+          const tmp = _othersBuf[i];
+          _othersBuf[i] = _othersBuf[j];
+          _othersBuf[j] = tmp;
+        }
+      }
+      if (i >= 5) break; // only need top 6
+    }
 
     for (let i = 0; i < 6; i++) {
       const base = 8 + i * 9;
-      if (i < others.length) {
-        const o = others[i];
-        const localPos = Q.applyToVec3(invQuat, o.relPos);
-        inputs[base + 0] = localPos[0] / 500;
-        inputs[base + 1] = localPos[1] / 500;
-        inputs[base + 2] = localPos[2] / 500;
-        const relVel = V3.sub(o.ship.vel, ship.vel);
-        const localVel = Q.applyToVec3(invQuat, relVel);
-        inputs[base + 3] = localVel[0] / PHYSICS.MAX_SPEED;
-        inputs[base + 4] = localVel[1] / PHYSICS.MAX_SPEED;
-        inputs[base + 5] = localVel[2] / PHYSICS.MAX_SPEED;
+      if (i < nOthers) {
+        const o = _othersBuf[i];
+        Q.applyToVec3Into(_invQuatTmp, o.r0, o.r1, o.r2, _localTmp);
+        inputs[base + 0] = _localTmp[0] / 500;
+        inputs[base + 1] = _localTmp[1] / 500;
+        inputs[base + 2] = _localTmp[2] / 500;
+        const vr0 = o.ship.vel[0] - ship.vel[0];
+        const vr1 = o.ship.vel[1] - ship.vel[1];
+        const vr2 = o.ship.vel[2] - ship.vel[2];
+        Q.applyToVec3Into(_invQuatTmp, vr0, vr1, vr2, _localTmp);
+        inputs[base + 3] = _localTmp[0] / PHYSICS.MAX_SPEED;
+        inputs[base + 4] = _localTmp[1] / PHYSICS.MAX_SPEED;
+        inputs[base + 5] = _localTmp[2] / PHYSICS.MAX_SPEED;
         inputs[base + 6] = o.ship.team === ship.team ? 1 : -1;
         inputs[base + 7] = o.ship.hp / o.ship.maxHp;
         inputs[base + 8] = o.ship.battery / o.ship.maxBattery;
       }
-      // else: stays 0
     }
 
     // Nearest 4 asteroids (4 each: local pos xyz / 500, radius / 50 = 16 inputs)
     if (asteroids && asteroids.length > 0) {
-      const astDist = [];
-      for (const a of asteroids) {
-        const relPos = V3.sub(a.pos, ship.pos);
-        const dist = V3.length(relPos);
-        astDist.push({ asteroid: a, dist, relPos });
+      // Simple insertion-sort for nearest 4 — avoid allocating temp arrays
+      const a4 = [null, null, null, null];
+      const a4d = [Infinity, Infinity, Infinity, Infinity];
+      const a4r = [[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
+      for (let ai = 0; ai < asteroids.length; ai++) {
+        const a = asteroids[ai];
+        const r0 = a.pos[0] - ship.pos[0];
+        const r1 = a.pos[1] - ship.pos[1];
+        const r2 = a.pos[2] - ship.pos[2];
+        const dist = Math.sqrt(r0 * r0 + r1 * r1 + r2 * r2);
+        // Insert into sorted top-4
+        for (let k = 0; k < 4; k++) {
+          if (dist < a4d[k]) {
+            // Shift down
+            for (let m = 3; m > k; m--) { a4[m] = a4[m-1]; a4d[m] = a4d[m-1]; a4r[m] = a4r[m-1]; }
+            a4[k] = a; a4d[k] = dist; a4r[k] = [r0, r1, r2];
+            break;
+          }
+        }
       }
-      astDist.sort((a, b) => a.dist - b.dist);
 
       for (let i = 0; i < 4; i++) {
         const base = 62 + i * 4;
-        if (i < astDist.length) {
-          const a = astDist[i];
-          const localPos = Q.applyToVec3(invQuat, a.relPos);
-          inputs[base + 0] = localPos[0] / 500;
-          inputs[base + 1] = localPos[1] / 500;
-          inputs[base + 2] = localPos[2] / 500;
-          inputs[base + 3] = a.asteroid.radius / 50;
+        if (a4[i]) {
+          Q.applyToVec3Into(_invQuatTmp, a4r[i][0], a4r[i][1], a4r[i][2], _localTmp);
+          inputs[base + 0] = _localTmp[0] / 500;
+          inputs[base + 1] = _localTmp[1] / 500;
+          inputs[base + 2] = _localTmp[2] / 500;
+          inputs[base + 3] = a4[i].radius / 50;
         }
       }
     }
@@ -321,9 +388,12 @@
   // ══════════════════════════════════════════════════════════════
   // ██  Apply NN outputs to ship — returns { firedAt: ship|null }
   // ══════════════════════════════════════════════════════════════
+  const _enemyBuf = [];   // reused buffer for enemy list in applyNNOutputs
+  const _firedResult = { firedAt: null };  // reused return object
+
   function applyNNOutputs(ship, outputs, allShips) {
     const hasFuel = ship.fuel > 0;
-    let firedAt = null;
+    _firedResult.firedAt = null;
 
     // outputs[0..2]: body torque (xyz)
     if (hasFuel) {
@@ -341,9 +411,10 @@
     // outputs[3]: engine burn along forward axis
     const burn = outputs[3];
     if (Math.abs(burn) > 0.1 && hasFuel) {
-      const fwd = Q.applyToVec3(ship.quat, [0, 0, 1]);
-      const thrust = V3.scale(fwd, burn * PHYSICS.THRUST);
-      V3.addMut(ship.vel, thrust);
+      Q.applyToVec3Into(ship.quat, 0, 0, 1, _fwdTmp);
+      ship.vel[0] += _fwdTmp[0] * burn * PHYSICS.THRUST;
+      ship.vel[1] += _fwdTmp[1] * burn * PHYSICS.THRUST;
+      ship.vel[2] += _fwdTmp[2] * burn * PHYSICS.THRUST;
       const speed = V3.length(ship.vel);
       if (speed > PHYSICS.MAX_SPEED) {
         V3.scaleMut(ship.vel, PHYSICS.MAX_SPEED / speed);
@@ -357,19 +428,30 @@
     }
 
     // outputs[4]: target selection, outputs[5]: fire
-    const enemies = [];
-    for (const s of allShips) {
-      if (s !== ship && s.alive && s.team !== ship.team) enemies.push(s);
+    let nEnemies = 0;
+    for (let i = 0; i < allShips.length; i++) {
+      const s = allShips[i];
+      if (s !== ship && s.alive && s.team !== ship.team) {
+        if (nEnemies < _enemyBuf.length) _enemyBuf[nEnemies] = s;
+        else _enemyBuf.push(s);
+        nEnemies++;
+      }
     }
-    // Sort by distance
-    enemies.sort((a, b) => V3.distanceTo(ship.pos, a.pos) - V3.distanceTo(ship.pos, b.pos));
+    // Sort only populated portion by distance
+    for (let i = 0; i < nEnemies - 1; i++) {
+      for (let j = i + 1; j < nEnemies; j++) {
+        const di = V3.distanceTo(ship.pos, _enemyBuf[i].pos);
+        const dj = V3.distanceTo(ship.pos, _enemyBuf[j].pos);
+        if (dj < di) { const tmp = _enemyBuf[i]; _enemyBuf[i] = _enemyBuf[j]; _enemyBuf[j] = tmp; }
+      }
+    }
 
-    if (enemies.length > 0) {
+    if (nEnemies > 0) {
       const idx = Math.min(
-        Math.floor((outputs[4] + 1) / 2 * enemies.length),
-        enemies.length - 1
+        Math.floor((outputs[4] + 1) / 2 * nEnemies),
+        nEnemies - 1
       );
-      const target = enemies[Math.max(0, idx)];
+      const target = _enemyBuf[Math.max(0, idx)];
 
       // Fire
       if (outputs[5] > 0 && ship.battery >= PHYSICS.WEAPON_COST) {
@@ -395,12 +477,12 @@
             target.alive = false;
           }
 
-          firedAt = target;
+          _firedResult.firedAt = target;
         }
       }
     }
 
-    return { firedAt };
+    return _firedResult;
   }
 
   // ══════════════════════════════════════════════════════════════
