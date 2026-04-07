@@ -185,6 +185,70 @@
   }
 
   // ══════════════════════════════════════════════════════════════
+  // ██  ReLUNetwork — ReLU hidden layers, tanh output layer
+  // ══════════════════════════════════════════════════════════════
+  class ReLUNetwork {
+    constructor(layers) {
+      this.layers = layers;
+      this.weights = [];
+      this.biases = [];
+      this._bufs = [];
+      for (let i = 0; i < layers.length - 1; i++) {
+        this.weights.push(new Float64Array(layers[i] * layers[i + 1]));
+        this.biases.push(new Float64Array(layers[i + 1]));
+        this._bufs.push(new Float64Array(layers[i + 1]));
+      }
+      this._inputBuf = new Float64Array(layers[0]);
+    }
+    get paramCount() {
+      let n = 0;
+      for (let i = 0; i < this.layers.length - 1; i++) {
+        n += this.layers[i] * this.layers[i + 1] + this.layers[i + 1];
+      }
+      return n;
+    }
+    fromGenome(genome) {
+      let idx = 0;
+      for (let i = 0; i < this.layers.length - 1; i++) {
+        const nW = this.layers[i] * this.layers[i + 1];
+        for (let j = 0; j < nW; j++) this.weights[i][j] = genome[idx++];
+        const nB = this.layers[i + 1];
+        for (let j = 0; j < nB; j++) this.biases[i][j] = genome[idx++];
+      }
+    }
+    toGenome() {
+      const g = new Float64Array(this.paramCount);
+      let idx = 0;
+      for (let i = 0; i < this.layers.length - 1; i++) {
+        for (let j = 0; j < this.weights[i].length; j++) g[idx++] = this.weights[i][j];
+        for (let j = 0; j < this.biases[i].length; j++) g[idx++] = this.biases[i][j];
+      }
+      return g;
+    }
+    forward(inputs) {
+      const inp = this._inputBuf;
+      for (let k = 0; k < inp.length; k++) inp[k] = inputs[k];
+      let activation = inp;
+      const lastLayer = this.layers.length - 2;
+      for (let i = 0; i <= lastLayer; i++) {
+        const nIn = this.layers[i];
+        const nOut = this.layers[i + 1];
+        const next = this._bufs[i];
+        const isOutput = (i === lastLayer);
+        for (let o = 0; o < nOut; o++) {
+          let sum = this.biases[i][o];
+          for (let j = 0; j < nIn; j++) {
+            sum += activation[j] * this.weights[i][o * nIn + j];
+          }
+          next[o] = isOutput ? Math.tanh(sum) : Math.max(0, sum); // ReLU hidden, tanh output
+        }
+        activation = next;
+      }
+      return activation;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // ██  Ship state — plain object, no Three.js
   // ══════════════════════════════════════════════════════════════
   function createShipState(team) {
@@ -459,51 +523,33 @@
     const errVz = ship.vel[2] - idealVz;
     const errSpeed = Math.sqrt(errVx * errVx + errVy * errVy + errVz * errVz);
 
+    // 5b. Blended correction: deflect aim by velocity error to kill lateral drift
+    //     No hard mode switch — smooth blend avoids oscillation.
     let burnCmd = 0;
 
-    if (errSpeed < 0.005) {
-      // Velocity is close enough to ideal — face target, no burn
-      // (pitchCmd/yawCmd already steer toward target)
-    } else {
+    if (errSpeed > 0.005) {
       // Transform velocity error into ship-local frame
       Q.applyToVec3Into(_steerInvQ, errVx, errVy, errVz, _steerVelLocal);
       const errLocalX = _steerVelLocal[0];
       const errLocalY = _steerVelLocal[1];
       const errLocalZ = _steerVelLocal[2];
-      const lateralErr = Math.sqrt(errLocalX * errLocalX + errLocalY * errLocalY);
 
-      // If velocity error has significant lateral component, override steering
-      // to face opposite the velocity error (so thrust can kill it)
-      if (lateralErr > Math.abs(errLocalZ) * 0.5 && lateralErr > 0.01) {
-        // Steer to face OPPOSITE the velocity error
-        // Error in world frame -> target position for steering = ship.pos - errV (normalized)
-        const errNx = -errVx / errSpeed;
-        const errNy = -errVy / errSpeed;
-        const errNz = -errVz / errSpeed;
-        // Transform this direction into local frame
-        Q.applyToVec3Into(_steerInvQ, errNx, errNy, errNz, _steerLocal);
-        const elx = _steerLocal[0], ely = _steerLocal[1], elz = _steerLocal[2];
-        const errDistXZ = Math.sqrt(elx * elx + elz * elz);
-        const corrYaw   = Math.atan2(elx, elz);
-        const corrPitch = Math.atan2(-ely, errDistXZ);
+      // Deflect aim direction by lateral velocity error:
+      //   drift right (errLocalX > 0) → aim left (subtract from yaw)
+      //   drift up    (errLocalY > 0) → aim down (add to pitch, since +pitch = nose down)
+      const corrGain = 3.0;
+      const corrYaw   = yawError   - corrGain * errLocalX;
+      const corrPitch = pitchError + corrGain * errLocalY;
+      pitchCmd = Math.max(-1, Math.min(1, Kp * corrPitch - Kd * pitchRate));
+      yawCmd   = Math.max(-1, Math.min(1, Kp * corrYaw   - Kd * yawRate));
 
-        // Override pitch/yaw to steer toward the correction direction
-        pitchCmd = Math.max(-1, Math.min(1, Kp * corrPitch - Kd * pitchRate));
-        yawCmd   = Math.max(-1, Math.min(1, Kp * corrYaw   - Kd * yawRate));
-
-        // Thrust forward if reasonably aligned with correction direction
-        const corrAlign = elz; // cos of angle to correction direction (elz ~ cos since normalized)
-        if (corrAlign > 0.5) {
-          burnCmd = Math.min(1, errSpeed * 10);
-        }
-      } else {
-        // Velocity error is mostly along forward axis — face target, modulate burn
-        // errLocalZ > 0 means we're going too fast forward → brake
-        // errLocalZ < 0 means we're going too slow → thrust
-        burnCmd = -Math.max(-1, Math.min(1, errLocalZ * 10));
-      }
+      // Burn based on forward component of velocity error
+      // errLocalZ > 0 → going too fast forward → brake (negative burn)
+      // errLocalZ < 0 → going too slow → thrust (positive burn)
+      burnCmd = Math.max(-1, Math.min(1, -errLocalZ * 10));
     }
-    burnCmd = Math.max(-1, Math.min(1, burnCmd));
+    // else: errSpeed < 0.005 → velocity ~= ideal, face target, no burn
+    //       (pitchCmd/yawCmd already steer toward target from step 4)
 
     return [pitchCmd, yawCmd, burnCmd];
   }
@@ -834,7 +880,7 @@
   // ══════════════════════════════════════════════════════════════
   const SimCore = {
     V3, Q, PHYSICS,
-    NeuralNetwork,
+    NeuralNetwork, ReLUNetwork,
     createShipState,
     createAsteroid,
     checkAsteroidCollisions,
