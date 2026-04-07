@@ -600,7 +600,8 @@
                 <option value="solo-explorer">Solo Explorer</option>
                 <option value="lunar-orbit">Lunar Orbit</option>
                 <option value="fleet-battle">Fleet Battle</option>
-            </select>
+                <option value="neuro-training">Neuro Training</option>
+             </select>
         </div>
         <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,255,0.2); font-family: 'Orbitron', sans-serif; font-size: 10px; color: #888; letter-spacing: 1px;">
             <label for="gravity-slider" style="display: flex; justify-content: space-between;">
@@ -618,7 +619,20 @@
         <p><span class="key">C</span> focus crosshair</p>
         <p><span class="key">F</span> camera follow</p>
         <p><span class="key">/</span> command input</p>
+        <p><span class="key">[ ]</span> time speed</p>
+        <p id="time-speed-label" style="margin-top: 4px; font-size: 11px; color: #00ffff; font-family: 'Orbitron', sans-serif; letter-spacing: 1px;">TIME: 1x</p>
+        <p id="fleet-count" style="margin-top: 4px; font-size: 11px; font-family: 'Orbitron', sans-serif; letter-spacing: 1px;"></p>
         <p id="mode-label" style="margin-top: 6px; font-size: 12px; color: #aaddff; text-transform: uppercase; letter-spacing: 1px;">Orbit</p>
+    </div>
+    
+    <div id="neuro-hud" style="display:none; position:fixed; top:12px; right:12px; background:rgba(0,0,0,0.75); border:1px solid #00ffcc; border-radius:6px; padding:10px 14px; font-family:'Orbitron',monospace; font-size:11px; color:#00ffcc; z-index:100; pointer-events:none; line-height:1.6; min-width:200px;">
+        <div style="font-size:13px; border-bottom:1px solid #00ffcc44; padding-bottom:4px; margin-bottom:4px;">NEURO TRAINING</div>
+        <div id="neuro-gen">GEN: 0</div>
+        <div id="neuro-match">MATCH: 0 / 10</div>
+        <div id="neuro-frame">FRAME: 0 / 1800</div>
+        <div id="neuro-matchup" style="color:#aaa">α#0 vs ω#0</div>
+        <div id="neuro-best" style="margin-top:4px; color:#ffcc00">BEST: 0</div>
+        <div id="neuro-avg" style="color:#88aacc">AVG: 0</div>
     </div>
     
     <div id="selection-indicators"></div>
@@ -681,10 +695,12 @@
         const KM_PER_UNIT = 0.1;
         
         // Ship physics (corvette-class, ~200m, 50,000 tonnes)
-        const MAX_FUEL = 500;               // 500 tonnes of propellant
+        const MAX_FUEL = 2500;              // 2500 tonnes of propellant
         const FUEL_COST_PER_FRAME = 0.4;    // tonnes per thrust frame (accel or brake — same engine)
         const MAX_SPEED = 0.5;              // 0.5 units/frame = ~5 km/s
         const THRUST = 0.015;               // engine thrust as acceleration: ~0.15 km/s² (2 MN on 50kt)
+        const TORQUE = 0.006;               // rotational acceleration: rad/frame² (RCS thrusters)
+        const TORQUE_FUEL_COST = 0.05;      // fuel cost per frame of active torque (1/8 of main engine)
         const SHIP_MASS = 50000;            // tonnes
         const WEAPON_CHARGES = 100;         // battery capacity (shields + weapons)
         const G_REAL = 6.674e-11;           // real gravitational constant (m³/(kg·s²))
@@ -694,6 +710,508 @@
         const G_GAME = G_REAL * 1000 / 1e6 / 3600;  // ~1.854e-17 in game units
         let gravityMultiplier = 1;           // ratio of effective G to real G (tunable via HUD)
         const ROCK_DENSITY = 2500;          // kg/m³ — typical stony asteroid
+        
+        // ══════════════════════════════════════════════════════════════
+        // ██  NEUROEVOLUTION — NEAT-lite ship AI training
+        // ══════════════════════════════════════════════════════════════
+        
+        // --- NeuralNetwork: fixed topology, fast forward pass ---
+        class NeuralNetwork {
+            // layers: array of layer sizes, e.g. [62, 16, 16, 6]
+            constructor(layers) {
+                this.layers = layers;
+                this.weights = []; // weights[i] = Float64Array for layer i→i+1
+                this.biases = [];  // biases[i]  = Float64Array for layer i+1
+                for (let i = 0; i < layers.length - 1; i++) {
+                    this.weights.push(new Float64Array(layers[i] * layers[i + 1]));
+                    this.biases.push(new Float64Array(layers[i + 1]));
+                }
+            }
+            // Total number of parameters (weights + biases)
+            get paramCount() {
+                let n = 0;
+                for (let i = 0; i < this.layers.length - 1; i++) {
+                    n += this.layers[i] * this.layers[i + 1] + this.layers[i + 1];
+                }
+                return n;
+            }
+            // Load flat genome array into weights/biases
+            fromGenome(genome) {
+                let idx = 0;
+                for (let i = 0; i < this.layers.length - 1; i++) {
+                    const nW = this.layers[i] * this.layers[i + 1];
+                    for (let j = 0; j < nW; j++) this.weights[i][j] = genome[idx++];
+                    const nB = this.layers[i + 1];
+                    for (let j = 0; j < nB; j++) this.biases[i][j] = genome[idx++];
+                }
+            }
+            // Export weights/biases back to flat array
+            toGenome() {
+                const g = new Float64Array(this.paramCount);
+                let idx = 0;
+                for (let i = 0; i < this.layers.length - 1; i++) {
+                    for (let j = 0; j < this.weights[i].length; j++) g[idx++] = this.weights[i][j];
+                    for (let j = 0; j < this.biases[i].length; j++) g[idx++] = this.biases[i][j];
+                }
+                return g;
+            }
+            // Forward pass: tanh hidden layers, tanh output
+            forward(inputs) {
+                let activation = Float64Array.from(inputs);
+                for (let i = 0; i < this.layers.length - 1; i++) {
+                    const nIn = this.layers[i];
+                    const nOut = this.layers[i + 1];
+                    const next = new Float64Array(nOut);
+                    for (let o = 0; o < nOut; o++) {
+                        let sum = this.biases[i][o];
+                        for (let j = 0; j < nIn; j++) {
+                            sum += activation[j] * this.weights[i][o * nIn + j];
+                        }
+                        next[o] = Math.tanh(sum);
+                    }
+                    activation = next;
+                }
+                return activation;
+            }
+        }
+        
+        // --- NEURO module: population, matches, evolution ---
+        const NEURO = {
+            active: false,
+            TOPOLOGY: [62, 16, 16, 6],  // inputs, hidden×2, outputs
+            POP_SIZE: 20,
+            MATCHES_PER_GEN: 10,
+            MUTATION_RATE: 0.1,
+            MUTATION_STRENGTH: 0.3,
+            MATCH_TIME_LIMIT: 60 * 30, // 30 seconds at 60fps = 1800 frames
+            
+            generation: 0,
+            matchIndex: 0,
+            matchFrame: 0,
+            population: [],     // array of { genome: Float64Array, fitness: 0, fights: 0 }
+            alphaIdx: -1,       // index into population for current match team Alpha
+            omegaIdx: -1,       // index into population for current match team Omega
+            alphaBrain: null,   // NeuralNetwork instance
+            omegaBrain: null,
+            matchShips: [],     // references to ships in the current match
+            bestFitness: -Infinity,
+            bestGenome: null,
+            
+            // Initialize population with random genomes
+            init() {
+                const nn = new NeuralNetwork(this.TOPOLOGY);
+                const nParams = nn.paramCount;
+                this.population = [];
+                for (let i = 0; i < this.POP_SIZE; i++) {
+                    const genome = new Float64Array(nParams);
+                    // Xavier-ish init: scale by 1/sqrt(fan_in)
+                    let idx = 0;
+                    for (let li = 0; li < this.TOPOLOGY.length - 1; li++) {
+                        const fanIn = this.TOPOLOGY[li];
+                        const scale = 1 / Math.sqrt(fanIn);
+                        const nW = this.TOPOLOGY[li] * this.TOPOLOGY[li + 1];
+                        for (let j = 0; j < nW; j++) genome[idx++] = (Math.random() * 2 - 1) * scale;
+                        const nB = this.TOPOLOGY[li + 1];
+                        for (let j = 0; j < nB; j++) genome[idx++] = 0; // biases start at 0
+                    }
+                    this.population.push({ genome, fitness: 0, fights: 0 });
+                }
+                this.generation = 0;
+                this.matchIndex = 0;
+                this.bestFitness = -Infinity;
+                this.bestGenome = null;
+                this.active = true;
+                this.startMatch();
+            },
+            
+            // Pick 2 random distinct genomes, load brains, reset arena
+            startMatch() {
+                this.matchFrame = 0;
+                // Pick 2 random indices
+                this.alphaIdx = Math.floor(Math.random() * this.POP_SIZE);
+                do {
+                    this.omegaIdx = Math.floor(Math.random() * this.POP_SIZE);
+                } while (this.omegaIdx === this.alphaIdx);
+                
+                // Create brain instances
+                this.alphaBrain = new NeuralNetwork(this.TOPOLOGY);
+                this.alphaBrain.fromGenome(this.population[this.alphaIdx].genome);
+                this.omegaBrain = new NeuralNetwork(this.TOPOLOGY);
+                this.omegaBrain.fromGenome(this.population[this.omegaIdx].genome);
+                
+                // Reset ships in the arena
+                this.resetArena();
+            },
+            
+            // Position 5v5 ships in fleet formation, reset all stats
+            resetArena() {
+                // Remove existing neuro ships
+                this.matchShips.forEach(s => {
+                    if (s.parent) scene.remove(s);
+                    if (s.userData.trail && s.userData.trail.line) {
+                        scene.remove(s.userData.trail.line);
+                    }
+                });
+                // Also remove them from global spaceships array
+                for (let i = spaceships.length - 1; i >= 0; i--) {
+                    if (spaceships[i].userData.neuralBrain) {
+                        if (spaceships[i].parent) scene.remove(spaceships[i]);
+                        if (spaceships[i].userData.trail && spaceships[i].userData.trail.line) {
+                            scene.remove(spaceships[i].userData.trail.line);
+                        }
+                        spaceships.splice(i, 1);
+                    }
+                }
+                this.matchShips = [];
+                
+                const separation = 50; // 5 km between fleet centers
+                const fleetSize = 5;
+                const spacingX = 12;
+                
+                const teams = [
+                    { team: 'player', color: 0x44aaff, prefix: 'NA', zSign: +1, brain: this.alphaBrain },
+                    { team: 'enemy',  color: 0xff4444, prefix: 'NO', zSign: -1, brain: this.omegaBrain },
+                ];
+                
+                teams.forEach(t => {
+                    const centerZ = t.zSign * separation;
+                    for (let i = 0; i < fleetSize; i++) {
+                        const x = (i - (fleetSize - 1) / 2) * spacingX;
+                        const y = 0;
+                        const z = centerZ;
+                        
+                        const config = {
+                            x, y, z,
+                            color: t.color,
+                            team: t.team,
+                            name: `${t.prefix}-${i + 1}`
+                        };
+                        const ship = createSingleSpaceship(config, spaceships.length);
+                        ship.position.set(x, y, z);
+                        ship.lookAt(x, y, -t.zSign * separation);
+                        
+                        // Tag as neural-controlled
+                        ship.userData.neuralBrain = t.brain;
+                        ship.userData.neuralTeamIdx = t === teams[0] ? this.alphaIdx : this.omegaIdx;
+                        ship.userData.neuralDamageDealt = 0;
+                        ship.userData.neuralDamageTaken = 0;
+                        ship.userData.neuralSurvived = true;
+                        
+                        // Trail
+                        const TRAIL_LENGTH = 60;
+                        const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+                        const trailColors = new Float32Array(TRAIL_LENGTH * 4);
+                        const trailGeometry = new THREE.BufferGeometry();
+                        trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+                        trailGeometry.setAttribute('customColor', new THREE.BufferAttribute(trailColors, 4));
+                        const trailMaterial = new THREE.ShaderMaterial({
+                            vertexShader: `
+                                attribute vec4 customColor;
+                                varying vec4 vColor;
+                                void main() {
+                                    vColor = customColor;
+                                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                                }
+                            `,
+                            fragmentShader: `
+                                varying vec4 vColor;
+                                void main() {
+                                    gl_FragColor = vColor;
+                                }
+                            `,
+                            transparent: true,
+                            depthWrite: false,
+                            blending: THREE.AdditiveBlending
+                        });
+                        const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                        trailLine.frustumCulled = false;
+                        scene.add(trailLine);
+                        ship.userData.trail = {
+                            line: trailLine,
+                            positions: [],
+                            maxLength: TRAIL_LENGTH,
+                        };
+                        
+                        spaceships.push(ship);
+                        scene.add(ship);
+                        this.matchShips.push(ship);
+                    }
+                });
+            },
+            
+            // Build the 62-element input vector for a ship
+            buildInputs(ship) {
+                const data = ship.userData;
+                const brain = data.neuralBrain;
+                const inputs = new Float64Array(62);
+                
+                // Own state (8 inputs)
+                const angV = data.angularVelocity;
+                inputs[0] = angV.x;
+                inputs[1] = angV.y;
+                inputs[2] = angV.z;
+                
+                const speed = data.velocity.length();
+                inputs[3] = speed / MAX_SPEED; // normalized 0..1
+                
+                // forward · velocity (how aligned we are with movement)
+                const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
+                inputs[4] = speed > 1e-4 ? fwd.dot(data.velocity.clone().normalize()) : 0;
+                
+                inputs[5] = data.battery / data.maxBattery;
+                inputs[6] = data.hp / data.maxHp;
+                inputs[7] = data.fuel / data.maxFuel;
+                
+                // Nearest 6 visible ships (9 each = 54 inputs)
+                // Sort all other ships by distance
+                const invQuat = ship.quaternion.clone().invert();
+                const others = [];
+                for (const other of this.matchShips) {
+                    if (other === ship || !other.parent) continue;
+                    const relPos = other.position.clone().sub(ship.position);
+                    const dist = relPos.length();
+                    others.push({ ship: other, dist, relPos });
+                }
+                others.sort((a, b) => a.dist - b.dist);
+                
+                for (let i = 0; i < 6; i++) {
+                    const base = 8 + i * 9;
+                    if (i < others.length) {
+                        const o = others[i];
+                        // Relative position in ship's local frame
+                        const localPos = o.relPos.clone().applyQuaternion(invQuat);
+                        // Normalize by a reasonable range (500 units ~ 50km)
+                        inputs[base + 0] = localPos.x / 500;
+                        inputs[base + 1] = localPos.y / 500;
+                        inputs[base + 2] = localPos.z / 500;
+                        // Relative velocity in local frame
+                        const relVel = o.ship.userData.velocity.clone().sub(data.velocity);
+                        const localVel = relVel.applyQuaternion(invQuat);
+                        inputs[base + 3] = localVel.x / MAX_SPEED;
+                        inputs[base + 4] = localVel.y / MAX_SPEED;
+                        inputs[base + 5] = localVel.z / MAX_SPEED;
+                        // Same team?
+                        inputs[base + 6] = o.ship.userData.team === data.team ? 1 : -1;
+                        inputs[base + 7] = o.ship.userData.hp / o.ship.userData.maxHp;
+                        inputs[base + 8] = o.ship.userData.battery / o.ship.userData.maxBattery;
+                    }
+                    // else: stays 0 (no ship in this slot)
+                }
+                
+                return inputs;
+            },
+            
+            // Apply NN outputs to a ship
+            applyOutputs(ship, outputs) {
+                const data = ship.userData;
+                const hasFuel = data.fuel > 0;
+                
+                // outputs[0..2]: body torque (xyz)
+                // outputs[3]: engineBurn (>0 forward, <0 brake)
+                // outputs[4]: targetSelect (which enemy to aim turrets at)
+                // outputs[5]: fire (>0 = fire)
+                
+                // Apply torque directly to angular velocity
+                if (hasFuel) {
+                    const torqueScale = TORQUE;
+                    data.angularVelocity.x += outputs[0] * torqueScale;
+                    data.angularVelocity.y += outputs[1] * torqueScale;
+                    data.angularVelocity.z += outputs[2] * torqueScale;
+                    // Cap angular velocity magnitude
+                    const maxAngSpeed = 0.1; // rad/frame
+                    const angSpeed = data.angularVelocity.length();
+                    if (angSpeed > maxAngSpeed) {
+                        data.angularVelocity.multiplyScalar(maxAngSpeed / angSpeed);
+                    }
+                    data.fuel = Math.max(0, data.fuel - TORQUE_FUEL_COST);
+                }
+                
+                // Engine burn along forward axis
+                const burn = outputs[3]; // -1..+1
+                if (Math.abs(burn) > 0.1 && hasFuel) {
+                    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
+                    data.velocity.add(fwd.multiplyScalar(burn * THRUST));
+                    if (data.velocity.length() > MAX_SPEED) {
+                        data.velocity.normalize().multiplyScalar(MAX_SPEED);
+                    }
+                    data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME * Math.abs(burn));
+                    data.isAccelerating = burn > 0;
+                    data.isBraking = burn < 0;
+                } else {
+                    data.isAccelerating = false;
+                    data.isBraking = false;
+                }
+                
+                // Target selection: pick enemy to aim turrets at
+                const enemies = this.matchShips.filter(s =>
+                    s !== ship && s.parent && s.userData.team !== data.team
+                ).sort((a, b) =>
+                    ship.position.distanceTo(a.position) - ship.position.distanceTo(b.position)
+                );
+                if (enemies.length > 0) {
+                    // Map tanh output [-1,1] to enemy index
+                    const idx = Math.min(
+                        Math.floor((outputs[4] + 1) / 2 * enemies.length),
+                        enemies.length - 1
+                    );
+                    const target = enemies[Math.max(0, idx)];
+                    
+                    // Set as attack target for turret tracking
+                    if (!data.behavior || data.behavior.type !== 'attack' || data.behavior.target !== target) {
+                        data.behavior = { type: 'attack', target };
+                    }
+                    
+                    // Fire if output > 0 and we have battery
+                    if (outputs[5] > 0 && data.battery >= 8) {
+                        const dist = ship.position.distanceTo(target.position);
+                        if (dist < 200) { // within weapon range (~20km)
+                            fireLaser(ship, target);
+                        }
+                    }
+                }
+            },
+            
+            // Called each sim frame from the animate loop
+            update() {
+                if (!this.active) return;
+                this.matchFrame++;
+                
+                // Run NN for each living neural ship
+                for (const ship of this.matchShips) {
+                    if (!ship.parent) continue; // destroyed
+                    const inputs = this.buildInputs(ship);
+                    const outputs = ship.userData.neuralBrain.forward(inputs);
+                    this.applyOutputs(ship, outputs);
+                }
+                
+                // Check match end conditions
+                const alphaAlive = this.matchShips.filter(s => s.parent && s.userData.team === 'player');
+                const omegaAlive = this.matchShips.filter(s => s.parent && s.userData.team === 'enemy');
+                
+                const matchOver = alphaAlive.length === 0 || omegaAlive.length === 0
+                    || this.matchFrame >= this.MATCH_TIME_LIMIT;
+                
+                if (matchOver) this.endMatch(alphaAlive, omegaAlive);
+            },
+            
+            // Score the match and start next
+            endMatch(alphaAlive, omegaAlive) {
+                // Compute scores for each team
+                const scoreTeam = (alive, popIdx, brain) => {
+                    let score = 0;
+                    // Survival bonus: 100 per surviving ship
+                    score += alive.length * 100;
+                    // HP remaining
+                    for (const s of alive) score += (s.userData.hp / s.userData.maxHp) * 50;
+                    // Damage dealt/taken across ALL ships that had this brain
+                    for (const s of this.matchShips) {
+                        if (s.userData.neuralTeamIdx === popIdx) {
+                            score += s.userData.neuralDamageDealt * 2;
+                            score -= s.userData.neuralDamageTaken;
+                        }
+                    }
+                    return score;
+                };
+                
+                const alphaScore = scoreTeam(alphaAlive, this.alphaIdx, this.alphaBrain);
+                const omegaScore = scoreTeam(omegaAlive, this.omegaIdx, this.omegaBrain);
+                
+                // Running average fitness
+                const updateFitness = (idx, score) => {
+                    const p = this.population[idx];
+                    p.fights++;
+                    p.fitness += (score - p.fitness) / p.fights;
+                };
+                updateFitness(this.alphaIdx, alphaScore);
+                updateFitness(this.omegaIdx, omegaScore);
+                
+                // Track best
+                for (const idx of [this.alphaIdx, this.omegaIdx]) {
+                    if (this.population[idx].fitness > this.bestFitness) {
+                        this.bestFitness = this.population[idx].fitness;
+                        this.bestGenome = new Float64Array(this.population[idx].genome);
+                    }
+                }
+                
+                this.matchIndex++;
+                
+                if (this.matchIndex >= this.MATCHES_PER_GEN) {
+                    this.evolve();
+                    this.matchIndex = 0;
+                    this.generation++;
+                }
+                
+                this.startMatch();
+            },
+            
+            // Evolutionary step: selection, crossover, mutation
+            evolve() {
+                // Sort by fitness descending
+                const sorted = [...this.population].sort((a, b) => b.fitness - a.fitness);
+                
+                // Keep top half as parents
+                const parents = sorted.slice(0, Math.floor(this.POP_SIZE / 2));
+                
+                // Fill population: top half survives, bottom half replaced by offspring
+                const newPop = [];
+                
+                // Elitism: top 2 survive unchanged
+                for (let i = 0; i < 2; i++) {
+                    newPop.push({
+                        genome: new Float64Array(parents[i].genome),
+                        fitness: 0, fights: 0
+                    });
+                }
+                
+                // Fill rest with crossover + mutation
+                while (newPop.length < this.POP_SIZE) {
+                    const p1 = parents[Math.floor(Math.random() * parents.length)];
+                    const p2 = parents[Math.floor(Math.random() * parents.length)];
+                    const child = this.crossover(p1.genome, p2.genome);
+                    this.mutate(child);
+                    newPop.push({ genome: child, fitness: 0, fights: 0 });
+                }
+                
+                this.population = newPop;
+            },
+            
+            // Uniform crossover
+            crossover(g1, g2) {
+                const child = new Float64Array(g1.length);
+                for (let i = 0; i < child.length; i++) {
+                    child[i] = Math.random() < 0.5 ? g1[i] : g2[i];
+                }
+                return child;
+            },
+            
+            // Gaussian mutation
+            mutate(genome) {
+                for (let i = 0; i < genome.length; i++) {
+                    if (Math.random() < this.MUTATION_RATE) {
+                        genome[i] += (Math.random() * 2 - 1) * this.MUTATION_STRENGTH;
+                    }
+                }
+            },
+            
+            // Update the neuro training HUD overlay
+            updateHUD() {
+                const el = document.getElementById('neuro-hud');
+                if (!el) return;
+                if (!this.active) { el.style.display = 'none'; return; }
+                el.style.display = 'block';
+                document.getElementById('neuro-gen').textContent = `GEN: ${this.generation}`;
+                document.getElementById('neuro-match').textContent = `MATCH: ${this.matchIndex + 1} / ${this.MATCHES_PER_GEN}`;
+                document.getElementById('neuro-frame').textContent = `FRAME: ${this.matchFrame} / ${this.MATCH_TIME_LIMIT}`;
+                document.getElementById('neuro-matchup').textContent = `α#${this.alphaIdx} vs ω#${this.omegaIdx}`;
+                document.getElementById('neuro-best').textContent = `BEST: ${this.bestFitness === -Infinity ? '—' : this.bestFitness.toFixed(1)}`;
+                // Compute population average fitness
+                let avgF = 0, counted = 0;
+                for (const p of this.population) {
+                    if (p.fights > 0) { avgF += p.fitness; counted++; }
+                }
+                document.getElementById('neuro-avg').textContent = `AVG: ${counted > 0 ? (avgF / counted).toFixed(1) : '—'}`;
+            },
+        };
         
         // Scene lighting (set in init, reconfigured per-scene in loadScene)
         let ambientLight, sunLight, blueLight, pinkLight;
@@ -724,6 +1242,13 @@
         
         // Keyboard controls
         let keys = { w: false, a: false, s: false, d: false, space: false, shift: false, alt: false, z: false, x: false };
+        
+        // Time speed control
+        let timeSpeed = 1;
+        let simAccumulator = 0;
+        const TIME_SPEEDS = [0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16];
+        let timeSpeedIndex = 5; // starts at 1x
+        
         const CAMERA_MOVE_SPEED_MIN = 0.2;
         const CAMERA_MOVE_SPEED_MAX = 10.0;
         const CAMERA_ACCEL_FRAMES = 45;  // frames to reach max speed
@@ -1731,6 +2256,7 @@
         }
         
         function loadScene(sceneName) {
+            NEURO.active = false;
             clearGameObjects();
             currentScene = sceneName;
             
@@ -2607,7 +3133,7 @@
                 createBoundarySphere();
                 
                 // Fleet configuration
-                const fleetSize = 40;
+                const fleetSize = 5;
                 const separation = 50; // 10 km between fleet centers (each fleet offset 5 km from origin)
                 const fleets = [
                     { team: 'player', color: 0x44aaff, prefix: 'Alpha', zSign: +1 },
@@ -2620,8 +3146,8 @@
                     // Formation: rectangular blocks arranged in rows and columns
                     // 10 columns (X) x 5 layers (Y) x 4 ranks (Z depth)
                     const cols = 5;    // across
-                    const layers = 4;  // vertical
-                    const ranks = 2;   // depth
+                    const layers = 1;  // vertical
+                    const ranks = 1;   // depth
                     const spacingX = 12; // 1.2 km between ships horizontally
                     const spacingY = 10; // 1 km vertical spacing
                     const spacingZ = 14; // 1.4 km rank depth
@@ -2699,6 +3225,38 @@
                 camOrbitCenter.set(0, 20, 0);
                 camSphereRadius = 120;
                 camSphereDir.set(0, 0.4, 1).normalize();
+                camSphereUp.set(0, 1, 0);
+                cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
+                cameraTarget.copy(camOrbitCenter);
+                cameraUpVector.set(0, 1, 0);
+                updateCameraPosition();
+            } else if (sceneName === 'neuro-training') {
+                // === NEURO TRAINING — automated 5v5 neural network evolution ===
+                WORLD_RADIUS = 8000;
+                scene.fog = null;
+                
+                sunLight.position.set(0, 1, 0.3).normalize().multiplyScalar(500);
+                sunLight.intensity = 1.5;
+                ambientLight.color.set(0x334455);
+                ambientLight.intensity = 0.8;
+                blueLight.intensity = 0.3;
+                pinkLight.intensity = 0.2;
+                
+                createBoundarySphere();
+                
+                // Initialize neuroevolution and spawn first match
+                NEURO.init();
+                
+                // Auto-speed: 8x for training
+                timeSpeedIndex = 11; // index 11 = 8x
+                timeSpeed = TIME_SPEEDS[timeSpeedIndex];
+                const tsEl = document.getElementById('time-speed-display');
+                if (tsEl) tsEl.textContent = `${timeSpeed}×`;
+                
+                // Camera: wide overview
+                camOrbitCenter.set(0, 20, 0);
+                camSphereRadius = 200;
+                camSphereDir.set(0, 0.5, 1).normalize();
                 camSphereUp.set(0, 1, 0);
                 cameraPosition.copy(camOrbitCenter).addScaledVector(camSphereDir, camSphereRadius);
                 cameraTarget.copy(camOrbitCenter);
@@ -2986,31 +3544,7 @@
                 ship.add(rightWindow);
             }
             
-            // === WINGTIP WEAPON PODS ===
-            const podGeometry = new THREE.CylinderGeometry(0.12 * s, 0.15 * s, 0.8 * s, 6);
-            
-            const leftPod = new THREE.Mesh(podGeometry, darkMat);
-            leftPod.rotation.x = Math.PI / 2;
-            leftPod.position.set(-3.2 * s, -0.2 * s, -0.5 * s);
-            ship.add(leftPod);
-            
-            const rightPod = new THREE.Mesh(podGeometry, darkMat);
-            rightPod.rotation.x = Math.PI / 2;
-            rightPod.position.set(3.2 * s, -0.2 * s, -0.5 * s);
-            ship.add(rightPod);
-            
-            // Weapon barrel tips
-            const barrelGeometry = new THREE.CylinderGeometry(0.03 * s, 0.03 * s, 0.6 * s, 4);
-            
-            const leftBarrel = new THREE.Mesh(barrelGeometry, accentMat);
-            leftBarrel.rotation.x = Math.PI / 2;
-            leftBarrel.position.set(-3.2 * s, -0.2 * s, -1.1 * s);
-            ship.add(leftBarrel);
-            
-            const rightBarrel = new THREE.Mesh(barrelGeometry, accentMat);
-            rightBarrel.rotation.x = Math.PI / 2;
-            rightBarrel.position.set(3.2 * s, -0.2 * s, -1.1 * s);
-            ship.add(rightBarrel);
+            // === TURRET-STYLE LENS WEAPONS (port/starboard) ===
             
             // === VERTICAL STABILIZERS - twin angled tail fins ===
             const finShape = new THREE.Shape();
@@ -3143,8 +3677,6 @@
             const navLights = [
                 { pos: [0, 0.8 * s, 0], color: 0xff2222, name: 'navTop' },
                 { pos: [0, -0.8 * s, 0], color: 0x22ff22, name: 'navBottom' },
-                { pos: [3.5 * s, -0.2 * s, -0.5 * s], color: 0xff8800, name: 'navRight' },
-                { pos: [-3.5 * s, -0.2 * s, -0.5 * s], color: 0x0088ff, name: 'navLeft' },
                 { pos: [0, 0, -6 * s], color: 0xffffff, name: 'navFront' },
                 { pos: [0, 0, 3 * s], color: 0xff00ff, name: 'navRear' },
             ];
@@ -3179,6 +3711,90 @@
                 ship.add(glowMesh);
             });
             
+            // === TURRETS (two lens-style weapon mounts, port & starboard) ===
+            const turretBaseMat = new THREE.MeshStandardMaterial({
+                color: 0x444444, emissive: 0x111111, emissiveIntensity: 0.15,
+                roughness: 0.3, metalness: 0.95
+            });
+            const lensColor = config.color || 0x00ccff;
+            const lensMat = new THREE.MeshBasicMaterial({
+                color: lensColor, transparent: true, opacity: 0.95,
+                blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            const lensGlowMat = new THREE.MeshBasicMaterial({
+                color: lensColor, transparent: true, opacity: 0.3,
+                blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            const lensRingMat = new THREE.MeshStandardMaterial({
+                color: 0x333333, emissive: 0x0a0a0a, emissiveIntensity: 0.1,
+                roughness: 0.2, metalness: 1.0
+            });
+            const turretPositions = [
+                { name: 'turret0', x: 0.85 * s, y: 0.05 * s, z: -0.5 * s },   // starboard
+                { name: 'turret1', x: -0.85 * s, y: 0.05 * s, z: -0.5 * s },  // port
+            ];
+            turretPositions.forEach(tp => {
+                const turret = new THREE.Group();
+                turret.name = tp.name;
+                turret.position.set(tp.x, tp.y, tp.z);
+                
+                // Mounting stub - short pylon connecting to hull
+                const pylon = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.08 * s, 0.12 * s, 0.15 * s, 6),
+                    turretBaseMat
+                );
+                pylon.rotation.z = tp.x > 0 ? -Math.PI / 2 : Math.PI / 2;
+                turret.add(pylon);
+                
+                // Rotating head (this part tracks the target)
+                const head = new THREE.Group();
+                head.name = 'head';
+                
+                // Dome housing - half-sphere armored shell
+                const dome = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.2 * s, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+                    turretBaseMat
+                );
+                dome.rotation.x = Math.PI / 2; // dome faces forward (-Z)
+                head.add(dome);
+                
+                // Focusing ring around the lens aperture
+                const ring = new THREE.Mesh(
+                    new THREE.TorusGeometry(0.14 * s, 0.025 * s, 6, 16),
+                    lensRingMat
+                );
+                ring.position.z = -0.08 * s;
+                head.add(ring);
+                
+                // Inner lens - bright team-colored emitter
+                const lens = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.12 * s, 12, 12),
+                    lensMat
+                );
+                lens.position.z = -0.1 * s;
+                lens.name = 'lens';
+                head.add(lens);
+                
+                // Lens outer glow halo
+                const lensGlow = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.22 * s, 10, 10),
+                    lensGlowMat
+                );
+                lensGlow.position.z = -0.1 * s;
+                head.add(lensGlow);
+                
+                // Secondary focus ring (inner, smaller)
+                const innerRing = new THREE.Mesh(
+                    new THREE.TorusGeometry(0.08 * s, 0.015 * s, 4, 12),
+                    lensRingMat
+                );
+                innerRing.position.z = -0.12 * s;
+                head.add(innerRing);
+                
+                turret.add(head);
+                ship.add(turret);
+            });
+            
             // === SELECTION RING ===
             const ringGeometry = new THREE.TorusGeometry(2, 0.04, 8, 32);
             const ringMaterial = new THREE.MeshBasicMaterial({
@@ -3189,7 +3805,7 @@
             selectionRing.name = 'selectionRing';
             ship.add(selectionRing);
             
-            // === SHIELD BUBBLE (invisible until hit) ===
+            // === SHIELD BUBBLE (invisible until hit) — semi-transparent sphere ===
             const shieldGeo = new THREE.SphereGeometry(1.8, 32, 24);
             const shieldMat = new THREE.MeshBasicMaterial({
                 color: config.color || 0x00ccff,
@@ -3218,6 +3834,7 @@
                 maxHp: 100,
                 shieldFlash: 0, // countdown frames for shield visual
                 velocity: new THREE.Vector3(0, 0, 0),
+                angularVelocity: new THREE.Vector3(0, 0, 0), // axis-angle: direction=axis, magnitude=rad/frame
                 targetVelocity: new THREE.Vector3(0, 0, 0),
                 isAccelerating: false,
                 isBraking: false,
@@ -3227,7 +3844,8 @@
                 engineOn: false,
                 baseY: config.y || 0,
                 fuelDepleted: false,
-                weaponsDepleted: false
+                weaponsDepleted: false,
+                nextTurret: 0
             };
             ship.position.set(config.x, config.y || 0, config.z);
             
@@ -3531,15 +4149,11 @@
             // Much brighter blue and less transparent to stand out against bright suns
             // Using custom exclusion blending so they invert against bright backgrounds
             const mat = new THREE.LineBasicMaterial({ 
-                color: 0x66ffff, 
+                color: 0x336666, 
                 transparent: true, 
-                opacity: 0.5, 
-                premultipliedAlpha: true,
+                opacity: 0.15, 
                 fog: false,
-                blending: THREE.CustomBlending,
-                blendEquation: THREE.AddEquation,
-                blendSrc: THREE.OneMinusDstColorFactor,
-                blendDst: THREE.OneMinusSrcColorFactor
+                depthWrite: false
             });
             const group = new THREE.Group();
             group.name = 'boundarySphere';
@@ -3690,6 +4304,18 @@
             
             if (key === 'z' || code === 'KeyZ') keys.z = true;
             if (key === 'x' || code === 'KeyX') keys.x = true;
+            
+            // [ and ] to change time speed
+            if (key === '[' || code === 'BracketLeft') {
+                timeSpeedIndex = Math.max(0, timeSpeedIndex - 1);
+                timeSpeed = TIME_SPEEDS[timeSpeedIndex];
+                document.getElementById('time-speed-label').textContent = timeSpeed === 0 ? 'TIME: PAUSED' : `TIME: ${timeSpeed}x`;
+            }
+            if (key === ']' || code === 'BracketRight') {
+                timeSpeedIndex = Math.min(TIME_SPEEDS.length - 1, timeSpeedIndex + 1);
+                timeSpeed = TIME_SPEEDS[timeSpeedIndex];
+                document.getElementById('time-speed-label').textContent = timeSpeed === 0 ? 'TIME: PAUSED' : `TIME: ${timeSpeed}x`;
+            }
             
             // TAB to cycle through ships, SHIFT+TAB to cycle back
             // (no mode change — just selection)
@@ -4291,16 +4917,20 @@
             
             // Damage calculation — battery (shields) absorbs first, then hull
             if (target.userData && target.userData.type === 'spaceship') {
-                const LASER_DAMAGE = 20;
+                const LASER_DAMAGE = 10;
                 const td = target.userData;
                 if (td.battery > 0) {
                     // Shield absorbs the hit
                     td.battery = Math.max(0, td.battery - LASER_DAMAGE);
-                    td.shieldFlash = 12; // show shield for 12 frames (~0.2s)
+                    td.shieldFlash = 45; // show shield for 45 frames (~0.75s)
                 } else {
                     // Battery depleted — hull takes damage
                     td.hp -= LASER_DAMAGE; // Takes 5 unshielded shots to kill
                 }
+                
+                // Neuroevolution damage tracking
+                if (ship.userData.neuralBrain) ship.userData.neuralDamageDealt = (ship.userData.neuralDamageDealt || 0) + LASER_DAMAGE;
+                if (td.neuralBrain) td.neuralDamageTaken = (td.neuralDamageTaken || 0) + LASER_DAMAGE;
                 
                 if (td.hp <= 0) {
                     // Destroy ship
@@ -4315,6 +4945,7 @@
                     }
                     
                     // Remove from scene and arrays
+                    if (td.neuralBrain) td.neuralSurvived = false;
                     scene.remove(target);
                     if (target.userData.trail && target.userData.trail.line) {
                         scene.remove(target.userData.trail.line);
@@ -4332,62 +4963,114 @@
             }
             
             const startPos = ship.position.clone();
-            const endPos = target.position.clone();
-            const distance = startPos.distanceTo(endPos);
+            // Pick the active turret and get its lens world position
+            const turretIndex = shipData.nextTurret || 0;
+            const turretName = 'turret' + turretIndex;
+            const turret = ship.getObjectByName(turretName);
+            let muzzlePos = startPos;
+            if (turret) {
+                const lens = turret.getObjectByName('lens');
+                if (lens) {
+                    ship.updateMatrixWorld(true);
+                    muzzlePos = new THREE.Vector3();
+                    lens.getWorldPosition(muzzlePos);
+                }
+            }
+            // Alternate turret for next shot
+            shipData.nextTurret = turretIndex === 0 ? 1 : 0;
+            
+            // Laser fires from turret toward target
+            const fullDistance = muzzlePos.distanceTo(target.position);
+            const laserDir = target.position.clone().sub(muzzlePos).normalize();
+            
+            // Beam stops at shield surface or hull surface, not at target center
+            let distance = fullDistance;
+            if (target.userData && target.userData.type === 'spaceship') {
+                const SHIELD_RADIUS = 1.8;
+                const HULL_RADIUS = 0.7;  // approximate ship hull radius
+                if (target.userData.battery > 0) {
+                    distance = Math.max(0.1, fullDistance - SHIELD_RADIUS);
+                } else {
+                    distance = Math.max(0.1, fullDistance - HULL_RADIUS);
+                }
+            }
+            const endPos = muzzlePos.clone().add(laserDir.clone().multiplyScalar(distance));
             
             // Create laser geometry — tapered, thicker at muzzle end
-            const laserGeometry = new THREE.CylinderGeometry(0.02, 0.15, distance, 6);
-            const laserMaterial = new THREE.MeshBasicMaterial({
-                color: 0xff0050,
+            // UV.y=0 is bottom (radiusBottom=thick=muzzle), UV.y=1 is top (radiusTop=thin=target)
+            const teamColor = new THREE.Color(ship.userData.teamColor || 0xff0050);
+            const laserGeometry = new THREE.CylinderGeometry(0.005, 0.04, distance, 4);
+            const laserMaterial = new THREE.ShaderMaterial({
+                uniforms: { uColor: { value: teamColor } },
+                vertexShader: `
+                    varying float vFade;
+                    void main() {
+                        vFade = uv.y;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 uColor;
+                    varying float vFade;
+                    void main() {
+                        float alpha = 0.7 * (1.0 - vFade * 0.9);
+                        gl_FragColor = vec4(uColor, alpha);
+                    }
+                `,
                 transparent: true,
-                opacity: 0.5,
                 blending: THREE.AdditiveBlending,
-                depthWrite: false
+                depthWrite: false,
             });
             const laser = new THREE.Mesh(laserGeometry, laserMaterial);
             
             // Position and orient laser
-            const midPoint = startPos.clone().add(endPos).multiplyScalar(0.5);
+            const midPoint = muzzlePos.clone().add(endPos).multiplyScalar(0.5);
             laser.position.copy(midPoint);
-            laser.lookAt(startPos); // lookAt source so wide end is at muzzle
+            laser.lookAt(endPos); // lookAt target so thick+bright end is at muzzle
             laser.rotateX(Math.PI / 2);
             
             scene.add(laser);
             lasers.push({ mesh: laser, created: Date.now() });
             
-            // Muzzle flash — bright burst at source
-            const flashGeometry = new THREE.SphereGeometry(0.7, 8, 8);
-            const flashMaterial = new THREE.MeshBasicMaterial({
-                color: 0xff3366,
-                transparent: true,
-                opacity: 0.9,
-                blending: THREE.AdditiveBlending,
-                depthWrite: false
-            });
-            const flash = new THREE.Mesh(flashGeometry, flashMaterial);
-            flash.position.copy(startPos);
-            scene.add(flash);
-            lasers.push({ mesh: flash, created: Date.now(), isFlash: true });
-            
             // No recoil for laser weapons - they don't have kickback
-            
-            // Target hit effect
-            setTimeout(() => {
-                const hitFlash = new THREE.Mesh(
-                    new THREE.SphereGeometry(1, 8, 8),
-                    new THREE.MeshBasicMaterial({
-                        color: 0xffaa00,
-                        transparent: true,
-                        opacity: 0.8
-                    })
-                );
-                hitFlash.position.copy(endPos);
-                scene.add(hitFlash);
-                lasers.push({ mesh: hitFlash, created: Date.now(), isFlash: true });
-            }, distance * 5);
             
             // Update HUD to show weapons depletion
             updateShipHUD();
+        }
+        
+        // Torque-based orientation: steers angularVelocity toward desired quaternion
+        // Returns true if torque was applied (costs fuel)
+        function applyTorqueToward(ship, data, targetQuat) {
+            // Compute rotation from current to target
+            const invCurrent = ship.quaternion.clone().invert();
+            const deltaQuat = targetQuat.clone().premultiply(invCurrent);
+            // Extract axis-angle from delta quaternion
+            const deltaAxis = new THREE.Vector3();
+            let deltaAngle = 2 * Math.acos(Math.min(1, Math.abs(deltaQuat.w)));
+            if (deltaAngle > 1e-4) {
+                const sinHalf = Math.sin(deltaAngle / 2);
+                deltaAxis.set(deltaQuat.x / sinHalf, deltaQuat.y / sinHalf, deltaQuat.z / sinHalf);
+                deltaAxis.normalize();
+            } else {
+                return false; // already aligned, no torque needed
+            }
+            // Shortest path: flip if angle > PI
+            if (deltaAngle > Math.PI) {
+                deltaAngle = 2 * Math.PI - deltaAngle;
+                deltaAxis.negate();
+            }
+            // Desired angular velocity: proportional to angle error, capped
+            const MAX_ANGULAR_SPEED = 0.08; // rad/frame — same turn rate as old slerp
+            const desiredAngSpeed = Math.min(deltaAngle * 0.3, MAX_ANGULAR_SPEED);
+            const desiredAngVel = deltaAxis.multiplyScalar(desiredAngSpeed);
+            // Apply torque: steer angular velocity toward desired
+            const angDiff = desiredAngVel.clone().sub(data.angularVelocity);
+            const diffMag = angDiff.length();
+            if (diffMag > TORQUE) {
+                angDiff.normalize().multiplyScalar(TORQUE);
+            }
+            data.angularVelocity.add(angDiff);
+            return true;
         }
         
         function updateSpaceships() {
@@ -4413,7 +5096,7 @@
                 const shieldChild = ship.getObjectByName('shield');
                 if (shieldChild) {
                     shieldChild.material.opacity = data.shieldFlash > 0
-                        ? (data.shieldFlash / 12) * 0.25
+                        ? (data.shieldFlash / 45) * 0.5
                         : 0;
                     shieldChild.visible = data.shieldFlash > 0;
                 }
@@ -4480,10 +5163,7 @@
                     }
                     
                     // Get ship's forward direction
-                    const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(
-                        new THREE.Vector3(0, 1, 0), 
-                        ship.rotation.y
-                    );
+                    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
                     
                     particle.position.copy(ship.position);
                     particle.position.sub(forward.multiplyScalar(2.5));
@@ -4523,18 +5203,30 @@
                 data.gravityMag = gravAccel.length(); // Save for HUD
                 data.velocity.add(gravAccel);
                 
-                // Apply physics: accelerate toward target velocity
+                // Apply physics: accelerate along ship's forward axis only
+                // Orientation is driven by angular momentum — torque steers, coasting preserves spin
+                
+                let applyingTorque = false;
+                
+                // Neural ships: NN controls thrust/torque directly via NEURO.applyOutputs()
+                // Skip the behavior-driven thrust/brake/RCS sections
+                if (!data.neuralBrain) {
+                
                 if (data.isAccelerating && hasFuel) {
-                    // Check if we actually need thrust (not already at cruise speed)
                     const velDiff = data.targetVelocity.clone().sub(data.velocity);
                     if (velDiff.length() > THRUST * 0.5) {
-                        // Thrust toward target velocity — burns fuel
-                        const acceleration = velDiff.normalize();
-                        // Make XZ acceleration much stronger than Y (vertical) acceleration
-                        // Ships are built to thrust forwards/backwards/sideways much faster than strictly up/down
-                        acceleration.x *= 2.5;
-                        acceleration.z *= 2.5;
-                        acceleration.normalize().multiplyScalar(THRUST);
+                        // Compute desired orientation
+                        const desiredDir = velDiff.clone().normalize();
+                        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+                            new THREE.Vector3(0, 0, 1), desiredDir
+                        );
+                        
+                        // Apply torque toward desired orientation
+                        applyingTorque = applyTorqueToward(ship, data, targetQuat);
+                        
+                        // Thrust along ship's actual forward direction
+                        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
+                        const acceleration = forward.multiplyScalar(THRUST);
                         
                         data.velocity.add(acceleration);
                         if (data.velocity.length() > MAX_SPEED) {
@@ -4547,21 +5239,50 @@
                         data.isAccelerating = false;
                     }
                 } else if (data.isBraking && hasFuel) {
-                    // Reverse thrust — same engine, same power, same fuel cost
+                    // Reverse thrust along ship's forward axis
                     if (speed <= THRUST) {
-                        // Would overshoot zero — clamp (physically correct: cut engines at zero)
                         data.velocity.set(0, 0, 0);
                     } else {
-                        const brakeDir = data.velocity.clone().normalize();
-                        brakeDir.x *= 2.5;
-                        brakeDir.z *= 2.5;
-                        brakeDir.normalize().multiplyScalar(-THRUST);
+                        // Turn to face velocity direction so we brake properly
+                        const velDir = data.velocity.clone().normalize();
+                        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+                            new THREE.Vector3(0, 0, 1), velDir
+                        );
+                        applyingTorque = applyTorqueToward(ship, data, targetQuat);
                         
-                        data.velocity.add(brakeDir);
+                        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quaternion);
+                        data.velocity.add(forward.multiplyScalar(-THRUST));
                     }
                     data.fuel = Math.max(0, data.fuel - FUEL_COST_PER_FRAME);
-                } else {
-                    // No thrust — in space, velocity is preserved (no drag)
+                }
+                // else: no thrust — but RCS auto-damping kills residual spin
+                
+                // RCS spin damping: when not actively maneuvering, kill angular velocity
+                // Crew would feel any rotation as centrifugal force — ships stabilize automatically
+                if (!applyingTorque && hasFuel) {
+                    const angSpeed = data.angularVelocity.length();
+                    if (angSpeed > 1e-5) {
+                        const dampAmount = Math.min(TORQUE, angSpeed);
+                        const dampDir = data.angularVelocity.clone().normalize().multiplyScalar(-dampAmount);
+                        data.angularVelocity.add(dampDir);
+                        applyingTorque = true; // costs fuel
+                    }
+                }
+                
+                } // end if (!data.neuralBrain)
+                
+                // Always apply angular velocity to quaternion (conservation of angular momentum)
+                const angSpeed = data.angularVelocity.length();
+                if (angSpeed > 1e-6) {
+                    const angAxis = data.angularVelocity.clone().normalize();
+                    const dq = new THREE.Quaternion().setFromAxisAngle(angAxis, angSpeed);
+                    ship.quaternion.premultiply(dq);
+                    ship.quaternion.normalize();
+                }
+                
+                // Fuel cost for torque (RCS thrusters)
+                if (applyingTorque && hasFuel) {
+                    data.fuel = Math.max(0, data.fuel - TORQUE_FUEL_COST);
                 }
                 
                 // Toast when fuel runs out
@@ -4573,13 +5294,6 @@
                 // Move ship based on velocity
                 if (speed > 0.001) {
                     ship.position.add(data.velocity);
-                    
-                    // Face direction of movement
-                    if (speed > 0.05) {
-                        const moveDir = data.velocity.clone().normalize();
-                        const targetRotation = Math.atan2(moveDir.x, moveDir.z);
-                        ship.rotation.y = targetRotation;
-                    }
                 }
                 
                 // Elastic collision with asteroids — compound shapes or ellipsoid fallback
@@ -5212,6 +5926,16 @@
                 nameDisplay.textContent = 'No Ship Selected';
                 nameDisplay.classList.add('no-ship');
             }
+            // Update fleet counters
+            const fleetEl = document.getElementById('fleet-count');
+            if (fleetEl) {
+                let friendly = 0, enemy = 0;
+                for (const s of spaceships) {
+                    if (s.userData.team === 'player') friendly++;
+                    else enemy++;
+                }
+                fleetEl.innerHTML = `<span style="color:#44aaff">\u25C6 ${friendly}</span> &nbsp; <span style="color:#ff4444">\u25C6 ${enemy}</span>`;
+            }
         }
         
         function updateAsteroids() {
@@ -5401,7 +6125,8 @@
             // Any WASD/ZX input cancels camera transition
             if (keys.w || keys.a || keys.s || keys.d || keys.z || keys.x) {
                 if (isCameraTransitioning) {
-                    // Snap orbit center to transition target so zoom goes toward the right place
+                    // Snap to transition target so orbit mode picks up at the intended position
+                    cameraPosition.copy(targetCameraPosition);
                     cameraTarget.copy(targetCameraTarget);
                     camOrbitCenter.copy(targetCameraTarget);
                     camSphereDir.copy(cameraPosition).sub(camOrbitCenter).normalize();
@@ -5664,6 +6389,8 @@
                     const a = allEntities[i], b = allEntities[j];
                     // Only show collision lines involving selected objects
                     if (!selectedObjects.includes(a) && !selectedObjects.includes(b)) continue;
+                    // Skip ship-to-ship pairs — only show ship vs non-ship collisions
+                    if (a.userData.type === 'spaceship' && b.userData.type === 'spaceship') continue;
                     const dist = a.position.distanceTo(b.position);
                     
                     const normal = a.position.clone().sub(b.position).normalize();
@@ -5953,14 +6680,27 @@
             }
             
             updateKeyboardControls();
-            updateShipBehaviors();
-            updateSpaceships();
-            updateAsteroids();
-            updateLasers();
+            
+            // Simulation steps governed by timeSpeed
+            simAccumulator += timeSpeed;
+            const maxSteps = 8; // cap to prevent freeze at high speeds
+            let steps = 0;
+            while (simAccumulator >= 1 && steps < maxSteps) {
+                NEURO.update();
+                updateShipBehaviors();
+                updateSpaceships();
+                updateAsteroids();
+                updateLasers();
+                simAccumulator -= 1;
+                steps++;
+            }
+            if (simAccumulator >= 1) simAccumulator = 0; // discard excess
+            
             updateStarField();
             updateBoundarySphere();
             updateProximityWireframe();
             updateShipHUD();
+            NEURO.updateHUD();
             updateCursorBeams();
             
             // Two-pass render: stars first (no depth interaction), then main scene
@@ -6513,16 +7253,22 @@
             
             // First process AI for ships that don't have user orders
             // Build a map of how many friendlies are attacking each enemy (for focus fire)
-            const attackCounts = new Map(); // enemy -> count of attackers
+            const attackCounts = new Map(); // target -> count of ships attacking it
+            const incomingEnemies = new Map(); // ship -> count of enemy ships attacking it
             spaceships.forEach(s => {
                 const b = s.userData.behavior;
                 if (b && b.type === 'attack' && b.target && b.target.parent) {
                     attackCounts.set(b.target, (attackCounts.get(b.target) || 0) + 1);
+                    if (s.userData.team !== b.target.userData.team) {
+                        incomingEnemies.set(b.target, (incomingEnemies.get(b.target) || 0) + 1);
+                    }
                 }
             });
             
             spaceships.forEach(ship => {
                 const data = ship.userData;
+                // Neural ships are controlled by NEURO.update() — skip behavior engine
+                if (data.neuralBrain) return;
                 // If ship doesn't have a specific manual order, let it fight
                 if (!data.behavior || data.behavior.type === 'orbit' || data.behavior.type === 'idle' || data.behavior.type === 'attack') {
                     // Find best target: prefer enemies already under attack by teammates (focus fire)
@@ -6581,15 +7327,17 @@
                 const fuelPct = data.fuel / data.maxFuel;
                 
                 // ── AUTONOMOUS: fuel self-preservation ──
+                // Disabled during combat — ships fight to the last drop
+                const inCombat = data.behavior && data.behavior.type === 'attack';
                 // Critical fuel (< 5%): cut all thrust, drift only
-                if (fuelPct < 0.05 && data.fuel > 0) {
+                if (!inCombat && fuelPct < 0.05 && data.fuel > 0) {
                     if (data.behavior && data.behavior.type !== 'fuelCritical' && data.behavior.type !== 'landed') {
                         shipReport(data, 'fuelCritical', 'FUEL CRITICAL — cutting engines, drifting');
                         data.behavior = { type: 'fuelCritical' };
                     }
                 }
                 // Low fuel (< 20%): seek orbit around nearest heavy asteroid (mass >= 1e9)
-                else if (fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake' && data.behavior.type !== 'landed') {
+                else if (!inCombat && fuelPct < 0.20 && data.behavior && data.behavior.type !== 'orbit' && data.behavior.type !== 'fuelSeekOrbit' && data.behavior.type !== 'brake' && data.behavior.type !== 'landed') {
                     // Find nearest heavy asteroid
                     let nearestHeavy = null, nearestDist = Infinity;
                     asteroids.forEach(a => {
@@ -6911,28 +7659,184 @@
                         
                         const toTarget = b.target.position.clone().sub(ship.position);
                         const dist = toTarget.length();
+                        const batteryPct = data.battery / data.maxBattery;
+                        const targetData = b.target.userData;
+                        const targetVel = targetData.velocity || new THREE.Vector3();
                         
-                        // Move to intercept (stay at ~50 units distance, which is ~5km)
-                        if (dist > 50) {
-                            data.targetVelocity.copy(toTarget.normalize().multiplyScalar(BEHAVIOR_SPEED));
+                        // Predict where both ships will be in ~1 second (60 frames)
+                        const LOOKAHEAD = 60;
+                        const futureTargetPos = b.target.position.clone().addScaledVector(targetVel, LOOKAHEAD);
+                        const futureMyPos = ship.position.clone().addScaledVector(data.velocity, LOOKAHEAD);
+                        const futureToTarget = futureTargetPos.clone().sub(futureMyPos);
+                        const futureDist = futureToTarget.length();
+                        
+                        // Tactical situation
+                        const enemiesOnMe = incomingEnemies.get(ship) || 0;
+                        const alliesOnTarget = attackCounts.get(b.target) || 0;
+                        
+                        // Flee decision with hysteresis
+                        const lowEnergy = batteryPct < 0.15;
+                        const beingFocused = enemiesOnMe >= 2;
+                        const shouldFlee = lowEnergy || beingFocused;
+                        const shouldStopFleeing = batteryPct >= 0.30 && enemiesOnMe <= 1;
+                        
+                        if (b.fleeing && shouldStopFleeing) {
+                            b.fleeing = false;
+                        } else if (shouldFlee) {
+                            b.fleeing = true;
+                        }
+                        
+                        if (b.fleeing) {
+                            // Predict: will the nearest threat close on me?
+                            // Find the closest enemy that's attacking me
+                            let nearestChaser = b.target;
+                            let nearestChaserDist = dist;
+                            for (const other of spaceships) {
+                                if (other.userData.team === data.team) continue;
+                                const ob = other.userData.behavior;
+                                if (ob && ob.type === 'attack' && ob.target === ship) {
+                                    const d = other.position.distanceTo(ship.position);
+                                    if (d < nearestChaserDist) {
+                                        nearestChaserDist = d;
+                                        nearestChaser = other;
+                                    }
+                                }
+                            }
+                            const chaserVel = nearestChaser.userData.velocity || new THREE.Vector3();
+                            const futureChaserPos = nearestChaser.position.clone().addScaledVector(chaserVel, LOOKAHEAD);
+                            const futureFleePos = ship.position.clone().addScaledVector(data.velocity, LOOKAHEAD);
+                            const futureFleeDist = futureChaserPos.distanceTo(futureFleePos);
+                            const SAFE_DIST = 100;
+                            
+                            if (futureFleeDist < SAFE_DIST) {
+                                // Chaser is closing — run away from their predicted position
+                                const awayDir = futureFleePos.clone().sub(futureChaserPos).normalize();
+                                data.targetVelocity.copy(awayDir.multiplyScalar(BEHAVIOR_SPEED));
+                                data.isAccelerating = true;
+                            } else {
+                                // Chaser is falling behind or veering off — coast and save fuel
+                                const velDiff = chaserVel.clone().sub(data.velocity).length();
+                                if (velDiff > THRUST * 3) {
+                                    // Still some relative velocity — match to maintain gap
+                                    data.targetVelocity.copy(data.velocity);
+                                }
+                                // else: already drifting apart, coast
+                            }
+                            // Still track turrets while fleeing (rear defense)
+                            if (dist < 80) {
+                                for (let ti = 0; ti < 2; ti++) {
+                                    const t = ship.getObjectByName('turret' + ti);
+                                    const h = t ? t.getObjectByName('head') : null;
+                                    if (h) {
+                                        const twp = new THREE.Vector3();
+                                        t.getWorldPosition(twp);
+                                        const ttl = b.target.position.clone().sub(twp);
+                                        ship.worldToLocal(ttl.add(ship.position));
+                                        ttl.sub(t.position).normalize();
+                                        const tq = new THREE.Quaternion().setFromUnitVectors(
+                                            new THREE.Vector3(0, 0, -1), ttl
+                                        );
+                                        h.quaternion.slerp(tq, 0.15);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        
+                        // Engagement ranges — dynamic based on fuel, tactical advantage, enemy state
+                        const fuelPct = data.fuel / data.maxFuel;
+                        const enemyBatteryPct = targetData ? targetData.battery / targetData.maxBattery : 1;
+                        const overnumbering = alliesOnTarget > enemiesOnMe + 1;
+                        const enemyWeak = enemyBatteryPct < 0.15;
+                        
+                        // Base ranges: aggressive when overnumbering/enemy weak, wider when conserving
+                        const basePursue = (enemyWeak || overnumbering) ? 30 : 50;
+                        const baseTooClose = (enemyWeak || overnumbering) ? 15 : 25;
+                        // Low fuel widens the dead band — accept worse positioning to save fuel
+                        // fuelPct 1.0 → multiplier 1.0, fuelPct 0.0 → multiplier 2.0
+                        const fuelStretch = 1 + (1 - fuelPct);
+                        const pursueRange = basePursue * fuelStretch;
+                        const tooCloseRange = baseTooClose / fuelStretch;
+                        
+                        if (futureDist > pursueRange) {
+                            // Will drift out of range — compute intercept velocity
+                            // Aim for ideal range midpoint, arriving in LOOKAHEAD frames
+                            const idealDist = (pursueRange + tooCloseRange) / 2;
+                            const interceptPos = futureTargetPos.clone().sub(
+                                futureToTarget.clone().normalize().multiplyScalar(idealDist)
+                            );
+                            const neededVel = interceptPos.sub(ship.position).divideScalar(LOOKAHEAD);
+                            // Cap at BEHAVIOR_SPEED
+                            if (neededVel.length() > BEHAVIOR_SPEED) {
+                                neededVel.normalize().multiplyScalar(BEHAVIOR_SPEED);
+                            }
+                            data.targetVelocity.copy(neededVel);
                             data.isAccelerating = true;
-                        } else if (dist < 30) {
-                            // Too close, back away
-                            data.targetVelocity.copy(toTarget.normalize().negate().multiplyScalar(BEHAVIOR_SPEED * 0.5));
+                        } else if (futureDist < tooCloseRange) {
+                            // Will drift too close — back away from predicted position
+                            data.targetVelocity.copy(futureToTarget.normalize().negate().multiplyScalar(BEHAVIOR_SPEED * 0.5));
                             data.isAccelerating = true;
                         } else {
-                            data.isBraking = true; // Stay in range
+                            // Predicted distance is in range — match target velocity and coast
+                            data.targetVelocity.copy(targetVel);
+                            const velDiff = targetVel.clone().sub(data.velocity).length();
+                            if (velDiff > THRUST * 3) {
+                                data.isAccelerating = true;
+                            }
+                            // else: velocity matched, coast — no fuel burn
                         }
                         
                         // Fire logic - must be within 80 units (8km) to fire
-                        if (dist < 80 && (!b.lastFired || Date.now() - b.lastFired > 1000)) { // Fire every 1s
-                            if (data.weapons >= 8) {
-                                // Face target
-                                ship.lookAt(b.target.position);
+                        if (dist < 80) {
+                            // Turrets independently track the target
+                            const toTarget2 = b.target.position.clone().sub(ship.position).normalize();
+                            
+                            // Pick the turret that will fire next
+                            const nextTurret = data.nextTurret || 0;
+                            const turret = ship.getObjectByName('turret' + nextTurret);
+                            const head = turret ? turret.getObjectByName('head') : null;
+                            
+                            let turretAimed = false;
+                            if (head) {
+                                // Get target direction in turret's local space
+                                const turretWorldPos = new THREE.Vector3();
+                                turret.getWorldPosition(turretWorldPos);
+                                const toTargetLocal = b.target.position.clone().sub(turretWorldPos);
+                                ship.worldToLocal(toTargetLocal.add(ship.position));
+                                // Offset for turret's position within the ship
+                                toTargetLocal.sub(turret.position).normalize();
                                 
-                                // Actually fire
-                                fireLaser(ship, b.target);
-                                b.lastFired = Date.now();
+                                const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+                                    new THREE.Vector3(0, 0, -1), toTargetLocal
+                                );
+                                head.quaternion.slerp(targetQuat, 0.15);
+                                
+                                // Check if turret is aimed (within ~10°)
+                                const turretForward = new THREE.Vector3(0, 0, -1).applyQuaternion(head.quaternion);
+                                turretAimed = turretForward.dot(toTargetLocal) > 0.985;
+                            }
+                            
+                            // Also rotate the other turret toward target (visual only)
+                            const otherTurret = ship.getObjectByName('turret' + (nextTurret === 0 ? 1 : 0));
+                            const otherHead = otherTurret ? otherTurret.getObjectByName('head') : null;
+                            if (otherHead) {
+                                const turretWorldPos = new THREE.Vector3();
+                                otherTurret.getWorldPosition(turretWorldPos);
+                                const toTargetLocal = b.target.position.clone().sub(turretWorldPos);
+                                ship.worldToLocal(toTargetLocal.add(ship.position));
+                                toTargetLocal.sub(otherTurret.position).normalize();
+                                const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+                                    new THREE.Vector3(0, 0, -1), toTargetLocal
+                                );
+                                otherHead.quaternion.slerp(targetQuat, 0.15);
+                            }
+                            
+                            // Fire when turret is aimed at target
+                            if (turretAimed && (!b.lastFired || Date.now() - b.lastFired > 1000)) {
+                                if (data.weapons >= 8) {
+                                    fireLaser(ship, b.target);
+                                    b.lastFired = Date.now();
+                                }
                             }
                         }
                         break;
