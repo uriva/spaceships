@@ -15,8 +15,8 @@ const {
 } = globalThis.SimCore;
 
 // ── Config ──
-const TOPOLOGY = [78, 16, 16, 6];
-const POP_SIZE = 60;
+const TOPOLOGY = [80, 16, 16, 6];
+const POP_SIZE = 80;
 const OPPONENTS_PER_EVAL = 3;
 const MUTATION_RATE = 0.12;
 const MUTATION_STRENGTH = 0.30;
@@ -26,7 +26,7 @@ const MATCH_FRAMES = 1500;        // ~25 seconds at 60fps
 const FLEET_SIZE = 2;
 const SEPARATION = 50;
 const SPREAD = 15;
-const RUN_MINUTES = 10;
+const RUN_MINUTES = 15;
 
 // ── Seed from existing genome ──
 function trySeedGenome() {
@@ -59,27 +59,20 @@ function generateArenaAsteroids(count = 12, radius = 60) {
 function scoreWithPenalties(allShips, matchFrames) {
   const base = scoreMatch(allShips, matchFrames);
 
-  // Apply per-ship penalties to each team
+  // Gentle penalties — must not drown positive signals from random genomes
   for (const teamKey of ['alpha', 'omega']) {
     const ships = allShips.filter(s => s.team === teamKey);
     let penalty = 0;
 
     for (const s of ships) {
-      // ── Wandering penalty: per-frame accumulated distance from center ──
+      // ── Wandering penalty: mild, just discourage leaving arena ──
       penalty += (s._wanderPenalty || 0) * 2;
 
-      // ── Fuel depletion penalty: punish ships that burn all fuel ──
-      const fuelRatio = s.fuel / s.maxFuel;
-      if (fuelRatio < 0.05) {
-        penalty += 300;   // harsh: completely out of fuel
-      } else if (fuelRatio < 0.2) {
-        penalty += 100;   // moderate: very low fuel
-      }
+      // ── Fuel depletion: small nudge ──
+      if (s.fuel / s.maxFuel < 0.05) penalty += 300;
 
-      // ── Idle penalty: ship never fired ──
-      if ((s._shotsFired || 0) === 0) {
-        penalty += 200;
-      }
+      // ── Idle penalty: never fired at all ──
+      if ((s._shotsFired || 0) === 0) penalty += 200;
     }
 
     base[teamKey] -= penalty;
@@ -109,6 +102,7 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
       s._shotsFired = 0;
       s._prevMinDist = Infinity;
       s._wanderPenalty = 0;
+      s._avgEnemyDist = 0;
       allShips.push(s);
     }
   }
@@ -152,6 +146,11 @@ function runMatchWithTracking(alphaBrain, omegaBrain, asteroids) {
       const distFromCenter = V3.length(s.pos);
       if (distFromCenter > ARENA_RADIUS) {
         s._wanderPenalty += (distFromCenter - ARENA_RADIUS) * 0.1;
+      }
+
+      // Track avg distance to nearest enemy (penalize staying far)
+      if (minDistToEnemy < Infinity) {
+        s._avgEnemyDist += minDistToEnemy;
       }
     }
   }

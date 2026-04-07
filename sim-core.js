@@ -261,11 +261,12 @@
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ██  Build 78-element NN input vector
+  // ██  Build 80-element NN input vector
   // ══════════════════════════════════════════════════════════════
-  // 8 own state + 54 (6 ships × 9) + 16 (4 asteroids × 4) = 78
+  // 10 own state + 54 (6 ships × 9) + 16 (4 asteroids × 4) = 80
+  // Own state: angVel(3), speed, velAlign, battery, hp, fuel, damageTaken, damageDealt
   // Pre-allocated scratch buffers to avoid per-call allocations
-  const _nnInputs = new Float64Array(78);
+  const _nnInputs = new Float64Array(80);
   const _fwdTmp = [0, 0, 0];
   const _relPosTmp = [0, 0, 0];
   const _relVelTmp = [0, 0, 0];
@@ -292,6 +293,8 @@
     inputs[5] = ship.battery / ship.maxBattery;
     inputs[6] = ship.hp / ship.maxHp;
     inputs[7] = ship.fuel / ship.maxFuel;
+    inputs[8] = ship.neuralDamageTaken / ship.maxHp;   // how hurt am I (0→1+)
+    inputs[9] = Math.min(ship.neuralDamageDealt / 100, 2); // how effective am I (scaled)
 
     // Nearest 6 visible ships (9 each = 54 inputs)
     Q.invertInto(ship.quat, _invQuatTmp);
@@ -327,7 +330,7 @@
     }
 
     for (let i = 0; i < 6; i++) {
-      const base = 8 + i * 9;
+      const base = 10 + i * 9;
       if (i < nOthers) {
         const o = _othersBuf[i];
         Q.applyToVec3Into(_invQuatTmp, o.r0, o.r1, o.r2, _localTmp);
@@ -371,7 +374,7 @@
       }
 
       for (let i = 0; i < 4; i++) {
-        const base = 62 + i * 4;
+        const base = 64 + i * 4;
         if (a4[i]) {
           Q.applyToVec3Into(_invQuatTmp, a4r[i][0], a4r[i][1], a4r[i][2], _localTmp);
           inputs[base + 0] = _localTmp[0] / 200;
