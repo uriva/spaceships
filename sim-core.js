@@ -331,9 +331,9 @@
       if (i < nOthers) {
         const o = _othersBuf[i];
         Q.applyToVec3Into(_invQuatTmp, o.r0, o.r1, o.r2, _localTmp);
-        inputs[base + 0] = _localTmp[0] / 500;
-        inputs[base + 1] = _localTmp[1] / 500;
-        inputs[base + 2] = _localTmp[2] / 500;
+        inputs[base + 0] = _localTmp[0] / 200;
+        inputs[base + 1] = _localTmp[1] / 200;
+        inputs[base + 2] = _localTmp[2] / 200;
         const vr0 = o.ship.vel[0] - ship.vel[0];
         const vr1 = o.ship.vel[1] - ship.vel[1];
         const vr2 = o.ship.vel[2] - ship.vel[2];
@@ -347,7 +347,7 @@
       }
     }
 
-    // Nearest 4 asteroids (4 each: local pos xyz / 500, radius / 50 = 16 inputs)
+    // Nearest 4 asteroids (4 each: local pos xyz / 200, radius / 50 = 16 inputs)
     if (asteroids && asteroids.length > 0) {
       // Simple insertion-sort for nearest 4 — avoid allocating temp arrays
       const a4 = [null, null, null, null];
@@ -374,9 +374,9 @@
         const base = 62 + i * 4;
         if (a4[i]) {
           Q.applyToVec3Into(_invQuatTmp, a4r[i][0], a4r[i][1], a4r[i][2], _localTmp);
-          inputs[base + 0] = _localTmp[0] / 500;
-          inputs[base + 1] = _localTmp[1] / 500;
-          inputs[base + 2] = _localTmp[2] / 500;
+          inputs[base + 0] = _localTmp[0] / 200;
+          inputs[base + 1] = _localTmp[1] / 200;
+          inputs[base + 2] = _localTmp[2] / 200;
           inputs[base + 3] = a4[i].radius / 50;
         }
       }
@@ -463,7 +463,7 @@
           // Apply damage to target
           if (target.battery > 0) {
             target.battery = Math.max(0, target.battery - PHYSICS.LASER_DAMAGE);
-            target.shieldFlash = 45;
+            target.shieldFlash = 15;
           } else {
             target.hp -= PHYSICS.LASER_DAMAGE;
           }
@@ -488,35 +488,52 @@
   // ══════════════════════════════════════════════════════════════
   // ██  Score a completed match — returns { alpha: number, omega: number }
   // ══════════════════════════════════════════════════════════════
-  function scoreMatch(allShips) {
+  // Ships must track: _framesInRange, _distanceClosed, _shotsFired (set by runMatch)
+  function scoreMatch(allShips, matchFrames) {
     const teams = { alpha: { ships: [], alive: [] }, omega: { ships: [], alive: [] } };
     for (const s of allShips) {
       teams[s.team].ships.push(s);
       if (s.alive) teams[s.team].alive.push(s);
     }
+    const totalFrames = matchFrames || 1800;
 
     function scoreTeam(teamKey, enemyKey) {
       let score = 0;
-      // Damage dealt ×3, damage taken ×0.5
-      for (const s of teams[teamKey].ships) {
-        score += s.neuralDamageDealt * 3;
-        score -= s.neuralDamageTaken * 0.5;
-      }
-      // Kill bonus: 150 per enemy killed
-      const enemiesKilled = teams[enemyKey].ships.length - teams[enemyKey].alive.length;
-      score += enemiesKilled * 150;
-      // Proximity penalty
-      const alive = teams[teamKey].alive;
+      const myShips = teams[teamKey].ships;
+      const myAlive = teams[teamKey].alive;
+      const enemyShips = teams[enemyKey].ships;
       const enemyAlive = teams[enemyKey].alive;
-      if (alive.length > 0 && enemyAlive.length > 0) {
+
+      // ── Damage dealt: primary signal (×5) ──
+      for (const s of myShips) score += s.neuralDamageDealt * 5;
+
+      // ── Kills: huge bonus, time-scaled (faster = better) ──
+      const enemiesKilled = enemyShips.length - enemyAlive.length;
+      score += enemiesKilled * 500;
+
+      // ── Pursuit: reward closing distance over time ──
+      for (const s of myShips) score += (s._distanceClosed || 0) * 3;
+
+      // ── Time in weapon range: reward being close enough to fire ──
+      for (const s of myShips) score += (s._framesInRange || 0) * 1.0;
+
+      // ── Shots fired: reward aggression (even misses show intent) ──
+      for (const s of myShips) score += (s._shotsFired || 0) * 10;
+
+      // ── Final proximity: heavy penalty for distance at match end ──
+      if (myAlive.length > 0 && enemyAlive.length > 0) {
         let totalDist = 0;
-        for (const s of alive) {
+        for (const s of myAlive) {
           let minDist = Infinity;
           for (const e of enemyAlive) minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
           totalDist += minDist;
         }
-        score -= Math.min(totalDist / alive.length, 200);
+        score -= (totalDist / myAlive.length) * 5;
       }
+
+      // ── Survival bonus ──
+      score += myAlive.length * 100;
+
       return score;
     }
 
@@ -601,6 +618,7 @@
     const matchTimeLimit = config.matchTimeLimit || 1800;
     const separation = config.separation || 50;
     const spread = config.spread || 30;
+    const asteroids = config.asteroids || [];
 
     // Create ships
     const allShips = [];
@@ -615,12 +633,19 @@
         s.pos[2] = zSign * separation + (Math.random() - 0.5) * spread;
         Q.setRandomMut(s.quat);
         s._brain = brain;
+        // Per-frame tracking for scoring
+        s._framesInRange = 0;
+        s._distanceClosed = 0;
+        s._shotsFired = 0;
+        s._prevMinDist = Infinity;
         allShips.push(s);
       }
     }
 
     // Simulate
+    let frameCount = 0;
     for (let frame = 0; frame < matchTimeLimit; frame++) {
+      frameCount++;
       // Check early termination
       let alphaAlive = false, omegaAlive = false;
       for (const s of allShips) {
@@ -634,13 +659,30 @@
       // NN + physics for each living ship
       for (const s of allShips) {
         if (!s.alive) continue;
-        const inputs = buildNNInputs(s, allShips, []);
+        const inputs = buildNNInputs(s, allShips, asteroids);
         const outputs = s._brain.forward(inputs);
-        applyNNOutputs(s, outputs, allShips);
+        const result = applyNNOutputs(s, outputs, allShips);
         shipSimStep(s);
+        if (asteroids.length > 0) checkAsteroidCollisions(s, asteroids);
+
+        // Track per-frame metrics
+        if (result.firedAt) s._shotsFired++;
+        let minDistToEnemy = Infinity;
+        for (const e of allShips) {
+          if (e === s || !e.alive || e.team === s.team) continue;
+          const d = V3.distanceTo(s.pos, e.pos);
+          if (d < minDistToEnemy) minDistToEnemy = d;
+        }
+        if (minDistToEnemy < PHYSICS.WEAPON_RANGE) s._framesInRange++;
+        if (s._prevMinDist < Infinity && minDistToEnemy < Infinity) {
+          const closed = s._prevMinDist - minDistToEnemy;
+          if (closed > 0) s._distanceClosed += closed;
+        }
+        s._prevMinDist = minDistToEnemy;
       }
     }
 
+    allShips._matchFrames = frameCount;
     return allShips;
   }
 
