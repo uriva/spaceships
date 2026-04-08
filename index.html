@@ -5633,6 +5633,8 @@
                 
                 
                 // Apply gravity from all asteroids (free — no fuel cost)
+                // Skip for followCrosshair ships — brain was trained without gravity
+                if (!data.followCrosshair) {
                 const G_eff = G_GAME * gravityMultiplier;
                 _tmpGravAccel.set(0, 0, 0);
                 for (let ai = 0; ai < asteroids.length; ai++) {
@@ -5646,6 +5648,9 @@
                 }
                 data.gravityMag = _tmpGravAccel.length();
                 data.velocity.add(_tmpGravAccel);
+                } else {
+                data.gravityMag = 0;
+                }
                 
                 // Apply physics: accelerate along ship's forward axis only
                 // Orientation is driven by angular momentum — torque steers, coasting preserves spin
