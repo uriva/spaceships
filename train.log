@@ -1,0 +1,61 @@
+Seeding from best-genome.json (fitness: 17905.6)
+Seeded 10 individuals from best-genome.json
+3v3 fleet trainer: focus fire + coordination
+Pop: 80, opponents/eval: 3, arena: 100u radius
+Topology: 80→16→16→6, params: 1670
+Running for 30 minutes...
+GEN    1 | top:  24004.1 | avg: -13018.4 | best:  24004.1 | 8436ms | 8s/1792s left
+GEN    2 | top:  23913.0 | avg: -46535.0 | best:  24004.1 | 8333ms | 17s/1783s left
+GEN    3 | top:  18880.4 | avg: -29487.8 | best:  24004.1 | 8534ms | 25s/1775s left
+GEN    5 | top:  19115.3 | avg:  -3206.9 | best:  24004.1 | 9027ms | 43s/1757s left
+GEN   10 | top:  21494.9 | avg:   9959.0 | best:  24004.1 | 8676ms | 88s/1712s left
+GEN   15 | top:  23310.5 | avg:  10554.5 | best:  24208.7 | 8187ms | 129s/1671s left
+GEN   20 | top:  22346.7 | avg:  14172.3 | best:  24208.7 | 8652ms | 172s/1628s left
+GEN   25 | top:  22614.3 | avg:  14195.0 | best:  24208.7 | 8369ms | 215s/1585s left
+GEN   30 | top:  23093.7 | avg:  13887.5 | best:  24208.7 | 8556ms | 256s/1544s left
+GEN   35 | top:  19180.8 | avg:  12179.4 | best:  24208.7 | 7533ms | 295s/1505s left
+GEN   40 | top:  19491.5 | avg:  14251.1 | best:  24208.7 | 7325ms | 332s/1468s left
+GEN   45 | top:  20001.2 | avg:  13751.6 | best:  24208.7 | 7739ms | 372s/1428s left
+GEN   50 | top:  21053.3 | avg:  14003.1 | best:  24208.7 | 7528ms | 410s/1390s left
+GEN   55 | top:  21308.9 | avg:  15782.2 | best:  24208.7 | 7606ms | 449s/1351s left
+GEN   60 | top:  19713.4 | avg:  14785.6 | best:  24208.7 | 7349ms | 486s/1314s left
+GEN   65 | top:  20140.2 | avg:  14785.0 | best:  24208.7 | 6695ms | 521s/1279s left
+GEN   70 | top:  18681.8 | avg:  14752.4 | best:  24208.7 | 6914ms | 555s/1245s left
+GEN   75 | top:  18899.5 | avg:  13939.3 | best:  24208.7 | 6931ms | 589s/1211s left
+GEN   80 | top:  19625.9 | avg:  14971.2 | best:  24208.7 | 6609ms | 623s/1177s left
+GEN   85 | top:  20794.6 | avg:  15113.4 | best:  24208.7 | 6690ms | 657s/1143s left
+GEN   90 | top:  18871.6 | avg:  15074.3 | best:  24208.7 | 6515ms | 692s/1108s left
+GEN   95 | top:  19910.9 | avg:  15734.8 | best:  24208.7 | 7677ms | 729s/1071s left
+GEN  100 | top:  21951.2 | avg:  15737.7 | best:  24208.7 | 7071ms | 766s/1034s left
+GEN  105 | top:  20102.6 | avg:  16366.2 | best:  24208.7 | 7082ms | 802s/998s left
+GEN  110 | top:  20592.4 | avg:  15669.5 | best:  24208.7 | 7289ms | 838s/962s left
+GEN  115 | top:  19597.2 | avg:  16317.7 | best:  24208.7 | 7136ms | 874s/926s left
+GEN  120 | top:  20360.6 | avg:  16038.8 | best:  24208.7 | 7420ms | 912s/888s left
+GEN  125 | top:  20427.8 | avg:  16018.3 | best:  24208.7 | 7257ms | 949s/851s left
+GEN  130 | top:  20694.5 | avg:  16337.2 | best:  24208.7 | 7495ms | 987s/813s left
+GEN  135 | top:  20076.4 | avg:  16429.9 | best:  24208.7 | 7396ms | 1024s/776s left
+GEN  140 | top:  19415.2 | avg:  16188.9 | best:  24208.7 | 7256ms | 1061s/739s left
+GEN  145 | top:  19370.2 | avg:  16064.3 | best:  24208.7 | 7722ms | 1098s/702s left
+GEN  150 | top:  19943.8 | avg:  16523.6 | best:  24208.7 | 6671ms | 1133s/667s left
+GEN  155 | top:  20783.3 | avg:  16781.2 | best:  24208.7 | 7254ms | 1169s/631s left
+GEN  160 | top:  19599.2 | avg:  16064.8 | best:  24208.7 | 6724ms | 1205s/595s left
+GEN  165 | top:  19249.7 | avg:  16690.9 | best:  24208.7 | 7530ms | 1241s/559s left
+GEN  170 | top:  20606.6 | avg:  16884.9 | best:  24208.7 | 7194ms | 1277s/523s left
+GEN  175 | top:  20067.8 | avg:  16252.7 | best:  24208.7 | 7075ms | 1313s/487s left
+GEN  180 | top:  20744.2 | avg:  16851.4 | best:  24208.7 | 7305ms | 1349s/451s left
+GEN  185 | top:  21846.7 | avg:  16167.8 | best:  24208.7 | 7037ms | 1385s/415s left
+GEN  190 | top:  21075.6 | avg:  16770.2 | best:  24208.7 | 6879ms | 1420s/380s left
+GEN  195 | top:  20981.9 | avg:  16042.3 | best:  24208.7 | 7833ms | 1456s/344s left
+GEN  200 | top:  21598.7 | avg:  15950.2 | best:  24208.7 | 7124ms | 1493s/307s left
+GEN  205 | top:  21333.3 | avg:  16485.7 | best:  24208.7 | 7239ms | 1529s/271s left
+GEN  210 | top:  22922.9 | avg:  16411.3 | best:  24208.7 | 7318ms | 1566s/234s left
+GEN  215 | top:  20039.2 | avg:  16762.8 | best:  24208.7 | 7328ms | 1603s/197s left
+GEN  220 | top:  19235.9 | avg:  16297.6 | best:  24208.7 | 7444ms | 1640s/160s left
+GEN  225 | top:  19395.0 | avg:  16688.2 | best:  24208.7 | 7194ms | 1676s/124s left
+GEN  230 | top:  20460.3 | avg:  16825.6 | best:  24208.7 | 7071ms | 1713s/87s left
+GEN  235 | top:  19823.9 | avg:  16933.1 | best:  24208.7 | 7275ms | 1749s/51s left
+GEN  240 | top:  20881.1 | avg:  17009.9 | best:  24208.7 | 6912ms | 1784s/16s left
+
+Done: 243 generations in 1805.1s
+Global best fitness: 24208.71
+Saved to best-genome.json

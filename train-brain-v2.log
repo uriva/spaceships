@@ -1,0 +1,89 @@
+Param count: 2629
+Seeded from /home/uri/uriva/spaceships/brain.json (fitness 95.9, gen 280, sigma=0.3412)
+sep-CMA-ES Brain Trainer (Phase 1: follow moving target)
+Topology: 43->32->32->5, params: 2629
+Lambda: 200, mu: 100, mueff: 52.6
+Episodes/candidate: 12, frames/episode: 3000
+Scenarios: deterministic per generation (seeded PRNG)
+Running for 60 minutes...
+
+GEN    1 | top:     68.7 | avg:     59.1 | best:     68.7 | sigma: 0.3358 | 9499ms | 9s/3591s
+GEN    2 | top:     38.7 | avg:     31.3 | best:     68.7 | sigma: 0.3311 | 6787ms | 16s/3584s
+GEN    3 | top:     69.3 | avg:     57.1 | best:     69.3 | sigma: 0.3268 | 9341ms | 26s/3574s
+GEN    5 | top:     61.8 | avg:     53.0 | best:     69.3 | sigma: 0.3192 | 10767ms | 44s/3556s
+GEN   10 | top:     45.4 | avg:     38.6 | best:     69.3 | sigma: 0.3048 | 7132ms | 91s/3509s
+GEN   15 | top:     71.8 | avg:     63.3 | best:     71.8 | sigma: 0.2944 | 9683ms | 136s/3464s
+GEN   20 | top:     59.8 | avg:     54.8 | best:     71.8 | sigma: 0.2866 | 11024ms | 179s/3421s
+GEN   25 | top:     50.7 | avg:     44.6 | best:     75.6 | sigma: 0.2804 | 10413ms | 235s/3365s
+GEN   30 | top:     49.9 | avg:     40.9 | best:     75.6 | sigma: 0.2756 | 9009ms | 285s/3315s
+GEN   35 | top:     61.9 | avg:     50.0 | best:     75.6 | sigma: 0.2721 | 9172ms | 335s/3265s
+GEN   40 | top:     62.1 | avg:     50.1 | best:     75.6 | sigma: 0.2695 | 10281ms | 386s/3214s
+GEN   45 | top:     50.7 | avg:     46.4 | best:     75.6 | sigma: 0.2677 | 10429ms | 433s/3167s
+GEN   50 | top:     67.0 | avg:     58.6 | best:     75.6 | sigma: 0.2662 | 10080ms | 489s/3111s
+GEN   55 | top:     49.0 | avg:     43.6 | best:     75.6 | sigma: 0.2652 | 9851ms | 534s/3066s
+GEN   60 | top:     55.7 | avg:     48.6 | best:     75.6 | sigma: 0.2643 | 10606ms | 582s/3018s
+GEN   65 | top:     60.3 | avg:     56.8 | best:     75.6 | sigma: 0.2638 | 10158ms | 630s/2970s
+GEN   70 | top:     59.1 | avg:     54.9 | best:     76.4 | sigma: 0.2636 | 9961ms | 676s/2924s
+GEN   75 | top:     46.9 | avg:     37.2 | best:     76.4 | sigma: 0.2636 | 7919ms | 715s/2885s
+GEN   80 | top:     45.0 | avg:     39.2 | best:     76.4 | sigma: 0.2637 | 8402ms | 764s/2836s
+GEN   85 | top:     50.3 | avg:     40.9 | best:     76.4 | sigma: 0.2637 | 8172ms | 808s/2792s
+GEN   90 | top:     65.0 | avg:     56.9 | best:     88.7 | sigma: 0.2638 | 10278ms | 858s/2742s
+GEN   95 | top:     58.9 | avg:     53.0 | best:     88.7 | sigma: 0.2640 | 10048ms | 907s/2693s
+GEN  100 | top:     54.2 | avg:     45.5 | best:     88.7 | sigma: 0.2643 | 9575ms | 952s/2648s
+GEN  105 | top:     58.6 | avg:     50.1 | best:     88.7 | sigma: 0.2646 | 10466ms | 1001s/2599s
+GEN  110 | top:     73.8 | avg:     60.3 | best:     88.7 | sigma: 0.2652 | 12121ms | 1053s/2547s
+GEN  115 | top:     52.6 | avg:     42.5 | best:     88.7 | sigma: 0.2656 | 9264ms | 1100s/2500s
+GEN  120 | top:     64.4 | avg:     47.2 | best:     88.7 | sigma: 0.2660 | 9233ms | 1146s/2454s
+GEN  125 | top:     74.1 | avg:     59.8 | best:    102.2 | sigma: 0.2663 | 10961ms | 1200s/2400s
+GEN  130 | top:     66.4 | avg:     51.1 | best:    102.2 | sigma: 0.2666 | 10329ms | 1248s/2352s
+GEN  135 | top:     72.4 | avg:     57.9 | best:    102.2 | sigma: 0.2671 | 10699ms | 1298s/2302s
+GEN  140 | top:     62.9 | avg:     53.3 | best:    102.2 | sigma: 0.2674 | 9734ms | 1344s/2256s
+GEN  145 | top:     63.2 | avg:     48.1 | best:    102.2 | sigma: 0.2673 | 8857ms | 1393s/2207s
+GEN  150 | top:     65.9 | avg:     57.7 | best:    102.2 | sigma: 0.2673 | 11727ms | 1443s/2157s
+GEN  155 | top:     52.5 | avg:     42.5 | best:    102.2 | sigma: 0.2678 | 8084ms | 1493s/2107s
+GEN  160 | top:     81.0 | avg:     64.8 | best:    102.2 | sigma: 0.2683 | 10985ms | 1543s/2057s
+GEN  165 | top:     65.0 | avg:     52.1 | best:    102.2 | sigma: 0.2688 | 10404ms | 1591s/2009s
+GEN  170 | top:     58.2 | avg:     47.3 | best:    106.8 | sigma: 0.2693 | 8414ms | 1643s/1957s
+GEN  175 | top:     66.5 | avg:     51.6 | best:    106.8 | sigma: 0.2701 | 10243ms | 1694s/1906s
+GEN  180 | top:     76.4 | avg:     55.5 | best:    106.8 | sigma: 0.2707 | 8767ms | 1747s/1853s
+GEN  185 | top:     55.5 | avg:     46.8 | best:    106.8 | sigma: 0.2711 | 9191ms | 1801s/1799s
+GEN  190 | top:     68.9 | avg:     57.0 | best:    106.8 | sigma: 0.2716 | 11483ms | 1857s/1743s
+GEN  195 | top:     86.5 | avg:     67.8 | best:    106.8 | sigma: 0.2724 | 10943ms | 1903s/1697s
+GEN  200 | top:     72.2 | avg:     55.1 | best:    106.8 | sigma: 0.2730 | 11807ms | 1959s/1641s
+GEN  205 | top:     74.1 | avg:     59.8 | best:    106.8 | sigma: 0.2733 | 11208ms | 2014s/1586s
+GEN  210 | top:     79.7 | avg:     66.9 | best:    106.8 | sigma: 0.2739 | 11994ms | 2071s/1529s
+GEN  215 | top:     75.6 | avg:     62.2 | best:    106.8 | sigma: 0.2747 | 10660ms | 2118s/1482s
+GEN  220 | top:     67.4 | avg:     55.9 | best:    106.8 | sigma: 0.2757 | 10216ms | 2170s/1430s
+GEN  225 | top:     91.7 | avg:     79.9 | best:    106.8 | sigma: 0.2767 | 12428ms | 2220s/1380s
+GEN  230 | top:     64.2 | avg:     50.3 | best:    106.8 | sigma: 0.2777 | 8809ms | 2265s/1335s
+GEN  235 | top:     48.0 | avg:     41.1 | best:    106.8 | sigma: 0.2784 | 8852ms | 2315s/1285s
+GEN  240 | top:     63.9 | avg:     55.0 | best:    106.8 | sigma: 0.2793 | 9547ms | 2361s/1239s
+GEN  245 | top:     86.9 | avg:     70.1 | best:    106.8 | sigma: 0.2802 | 10238ms | 2410s/1190s
+GEN  250 | top:     67.0 | avg:     58.2 | best:    106.8 | sigma: 0.2810 | 11206ms | 2460s/1140s
+GEN  255 | top:     66.5 | avg:     47.0 | best:    106.8 | sigma: 0.2815 | 8506ms | 2509s/1091s
+GEN  260 | top:     79.9 | avg:     64.7 | best:    106.8 | sigma: 0.2815 | 10019ms | 2555s/1045s
+GEN  265 | top:     92.1 | avg:     73.7 | best:    106.8 | sigma: 0.2814 | 12027ms | 2602s/998s
+GEN  270 | top:     52.7 | avg:     41.8 | best:    106.8 | sigma: 0.2815 | 8960ms | 2645s/955s
+GEN  275 | top:     67.3 | avg:     52.2 | best:    106.8 | sigma: 0.2815 | 9469ms | 2697s/903s
+GEN  280 | top:     97.6 | avg:     69.7 | best:    106.8 | sigma: 0.2812 | 10676ms | 2751s/849s
+GEN  285 | top:     76.6 | avg:     59.4 | best:    106.8 | sigma: 0.2810 | 9814ms | 2802s/798s
+GEN  290 | top:     95.2 | avg:     60.8 | best:    106.8 | sigma: 0.2811 | 8369ms | 2848s/752s
+GEN  295 | top:     74.8 | avg:     59.1 | best:    107.5 | sigma: 0.2813 | 10321ms | 2898s/702s
+GEN  300 | top:     54.2 | avg:     40.9 | best:    110.3 | sigma: 0.2818 | 7498ms | 2948s/652s
+GEN  305 | top:     62.2 | avg:     45.9 | best:    110.3 | sigma: 0.2823 | 9382ms | 2999s/601s
+GEN  310 | top:     77.7 | avg:     51.9 | best:    110.3 | sigma: 0.2831 | 7840ms | 3048s/552s
+GEN  315 | top:     48.3 | avg:     39.5 | best:    110.3 | sigma: 0.2840 | 6821ms | 3095s/505s
+GEN  320 | top:     80.0 | avg:     68.9 | best:    110.3 | sigma: 0.2846 | 11990ms | 3157s/443s
+GEN  325 | top:     63.8 | avg:     48.4 | best:    110.5 | sigma: 0.2852 | 8243ms | 3200s/400s
+GEN  330 | top:     81.0 | avg:     72.1 | best:    110.5 | sigma: 0.2858 | 11414ms | 3254s/346s
+GEN  335 | top:     65.9 | avg:     53.0 | best:    110.5 | sigma: 0.2864 | 9582ms | 3305s/295s
+GEN  340 | top:     67.3 | avg:     52.3 | best:    110.5 | sigma: 0.2868 | 10193ms | 3359s/241s
+GEN  345 | top:     60.3 | avg:     49.4 | best:    110.5 | sigma: 0.2872 | 8743ms | 3408s/192s
+GEN  350 | top:     48.2 | avg:     36.3 | best:    110.5 | sigma: 0.2878 | 8363ms | 3458s/142s
+GEN  355 | top:     95.4 | avg:     65.7 | best:    110.5 | sigma: 0.2883 | 10420ms | 3507s/93s
+GEN  360 | top:     82.0 | avg:     65.5 | best:    110.5 | sigma: 0.2887 | 11208ms | 3556s/44s
+GEN  365 | top:     77.4 | avg:     58.9 | best:    110.5 | sigma: 0.2891 | 8958ms | 3608s/0s
+
+Done: 365 generations in 3607.6s
+Global best fitness: 110.48
+Saved to /home/uri/uriva/spaceships/brain.json

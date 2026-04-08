@@ -119,6 +119,11 @@
     BATTERY_RECHARGE: 0.02,
     MAX_ANG_SPEED: 0.05,         // rad/frame cap for neural torque
     WEAPON_RANGE: 200,          // units (~20 km)
+    WEAPON_CONE_COS: Math.cos(5 * Math.PI / 180),  // cos(5°) half-angle cone
+    // Gravity: G_real converted to game units (gu distance, tonnes mass, frames time)
+    // G_game = G_real × 1000 / 1e6 / 3600 = ~1.854e-17
+    G_GAME: 6.674e-11 * 1000 / 1e6 / 3600,
+    ROCK_DENSITY: 2500,       // kg/m³ — typical stony asteroid
   };
 
   // ══════════════════════════════════════════════════════════════
@@ -456,6 +461,300 @@
     }
 
     return inputs;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ██  Gravity — apply asteroid gravitational acceleration
+  // ══════════════════════════════════════════════════════════════
+  // asteroids must have .pos [x,y,z] and .mass (tonnes)
+  // gravityMultiplier defaults to 1 (real gravity)
+  function applyGravity(ship, asteroids, gravityMultiplier) {
+    if (!asteroids || asteroids.length === 0) return;
+    const gm = (gravityMultiplier || 1);
+    const G = PHYSICS.G_GAME * gm;
+    for (let i = 0; i < asteroids.length; i++) {
+      const a = asteroids[i];
+      const dx = a.pos[0] - ship.pos[0];
+      const dy = a.pos[1] - ship.pos[1];
+      const dz = a.pos[2] - ship.pos[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      const dist = Math.sqrt(distSq);
+      if (dist < 3) continue; // avoid singularity at overlap
+      const strength = G * a.mass / distSq;
+      const invDist = 1 / dist;
+      ship.vel[0] += dx * invDist * strength;
+      ship.vel[1] += dy * invDist * strength;
+      ship.vel[2] += dz * invDist * strength;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ██  Build 43-element brain input vector (BRAIN.md spec)
+  // ══════════════════════════════════════════════════════════════
+  // All entity positions as ship-local polar (azimuth, elevation, distance).
+  // targetPos: [x,y,z] world position of current target.
+  // enemies/friends: arrays of ship states (can be empty).
+  // asteroids: array of {pos, radius, mass} (can be empty).
+  const _brainInputs = new Float64Array(43);
+  const _brainInvQ = [0, 0, 0, 1];
+  const _brainLocal = [0, 0, 0];
+  const _brainFwd = [0, 0, 0];
+
+  // Convert world-space vector to ship-local polar (azimuth, elevation, distance)
+  // Returns [azimuth/π, elevation/(π/2), 1/(1+dist/50)]
+  // If distance is 0 (no entity), returns [0, 0, 0]
+  function _worldToLocalPolar(shipQuat, invQuat, worldDelta, out) {
+    const dist = Math.sqrt(worldDelta[0] * worldDelta[0] + worldDelta[1] * worldDelta[1] + worldDelta[2] * worldDelta[2]);
+    if (dist < 1e-6) { out[0] = 0; out[1] = 0; out[2] = 0; return; }
+    Q.applyToVec3Into(invQuat, worldDelta[0], worldDelta[1], worldDelta[2], _brainLocal);
+    const lx = _brainLocal[0], ly = _brainLocal[1], lz = _brainLocal[2];
+    const horizDist = Math.sqrt(lx * lx + lz * lz);
+    const azimuth = Math.atan2(lx, lz);          // -π to π, 0 = forward
+    const elevation = Math.atan2(ly, horizDist);  // -π/2 to π/2
+    out[0] = azimuth / Math.PI;
+    out[1] = elevation / (Math.PI / 2);
+    out[2] = 1 / (1 + dist / 50);
+  }
+
+  function buildBrainInputs(ship, targetPos, enemies, friends, asteroids) {
+    const inp = _brainInputs;
+    inp.fill(0);
+
+    Q.invertInto(ship.quat, _brainInvQ);
+
+    // ── Own state (6) ──
+    inp[0] = ship.hp / ship.maxHp;
+    inp[1] = ship.battery / ship.maxBattery;
+    inp[2] = ship.fuel / ship.maxFuel;
+    const speed = V3.length(ship.vel);
+    inp[3] = speed / PHYSICS.MAX_SPEED;
+
+    // Velocity direction in local frame (azimuth, elevation)
+    if (speed > 1e-4) {
+      Q.applyToVec3Into(_brainInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _brainLocal);
+      const lx = _brainLocal[0], ly = _brainLocal[1], lz = _brainLocal[2];
+      const horizDist = Math.sqrt(lx * lx + lz * lz);
+      inp[4] = Math.atan2(lx, lz) / Math.PI;             // vel azimuth
+      inp[5] = Math.atan2(ly, horizDist) / (Math.PI / 2); // vel elevation
+    }
+
+    // ── Target (3) ──
+    if (targetPos) {
+      const delta = [targetPos[0] - ship.pos[0], targetPos[1] - ship.pos[1], targetPos[2] - ship.pos[2]];
+      _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
+      inp[6] = _brainLocal[0]; inp[7] = _brainLocal[1]; inp[8] = _brainLocal[2];
+    }
+
+    // ── Closest 3 enemies (9) ──
+    if (enemies && enemies.length > 0) {
+      // Sort by distance (only need top 3)
+      const sorted = [];
+      for (let i = 0; i < enemies.length; i++) {
+        if (!enemies[i].alive) continue;
+        const d = V3.distanceTo(ship.pos, enemies[i].pos);
+        sorted.push({ s: enemies[i], d });
+      }
+      sorted.sort((a, b) => a.d - b.d);
+      const n = Math.min(3, sorted.length);
+      for (let i = 0; i < n; i++) {
+        const base = 9 + i * 3;
+        const e = sorted[i].s;
+        const delta = [e.pos[0] - ship.pos[0], e.pos[1] - ship.pos[1], e.pos[2] - ship.pos[2]];
+        _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
+        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+      }
+    }
+
+    // ── Closest 3 friends (9) ──
+    if (friends && friends.length > 0) {
+      const sorted = [];
+      for (let i = 0; i < friends.length; i++) {
+        if (!friends[i].alive || friends[i] === ship) continue;
+        const d = V3.distanceTo(ship.pos, friends[i].pos);
+        sorted.push({ s: friends[i], d });
+      }
+      sorted.sort((a, b) => a.d - b.d);
+      const n = Math.min(3, sorted.length);
+      for (let i = 0; i < n; i++) {
+        const base = 18 + i * 3;
+        const f = sorted[i].s;
+        const delta = [f.pos[0] - ship.pos[0], f.pos[1] - ship.pos[1], f.pos[2] - ship.pos[2]];
+        _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
+        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+      }
+    }
+
+    // ── Closest 4 asteroids (16) — includes diameter ──
+    if (asteroids && asteroids.length > 0) {
+      const sorted = [];
+      for (let i = 0; i < asteroids.length; i++) {
+        const d = V3.distanceTo(ship.pos, asteroids[i].pos);
+        sorted.push({ a: asteroids[i], d });
+      }
+      sorted.sort((a, b) => a.d - b.d);
+      const n = Math.min(4, sorted.length);
+      for (let i = 0; i < n; i++) {
+        const base = 27 + i * 4;
+        const a = sorted[i].a;
+        const delta = [a.pos[0] - ship.pos[0], a.pos[1] - ship.pos[1], a.pos[2] - ship.pos[2]];
+        _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
+        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+        inp[base + 3] = 1 / (1 + (a.radius * 2) / 100); // diameter normalization
+      }
+    }
+
+    return inp;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ██  Apply brain outputs — low-level controller (BRAIN.md spec)
+  // ══════════════════════════════════════════════════════════════
+  // outputs[0]: azimuth (-1→1 mapped to -π→π) — desired facing direction in ship-local
+  // outputs[1]: elevation (-1→1 mapped to -π/2→π/2) — desired facing direction in ship-local
+  // outputs[2]: desired speed (tanh remapped to 0–1, then × MAX_SPEED)
+  // outputs[3]: fuel spend rate (tanh remapped to 0–1)
+  // outputs[4]: fire (>0 = shoot forward cannon)
+  const _brainTargetDir = [0, 0, 0];
+  const _brainCross = [0, 0, 0];
+
+  function applyBrainOutputs(ship, outputs, enemies) {
+    const hasFuel = ship.fuel > 0;
+
+    // ── Decode outputs ──
+    const azimuth = outputs[0] * Math.PI;               // -π to π in local frame
+    const elevation = outputs[1] * (Math.PI / 2);       // -π/2 to π/2 in local frame
+    const desiredSpeed = (outputs[2] + 1) / 2 * PHYSICS.MAX_SPEED;  // tanh → 0–1 → 0–MAX_SPEED
+    const fuelSpend = (outputs[3] + 1) / 2;             // tanh → 0–1
+    const fireCmd = outputs[4];
+
+    // ── 1. Compute desired direction in local frame from azimuth/elevation ──
+    // Local frame: +Z = forward, +X = right, +Y = up
+    const cosEl = Math.cos(elevation);
+    _brainTargetDir[0] = Math.sin(azimuth) * cosEl;   // local X
+    _brainTargetDir[1] = Math.sin(elevation);          // local Y
+    _brainTargetDir[2] = Math.cos(azimuth) * cosEl;   // local Z (forward)
+
+    // ── 2. Turn toward desired direction ──
+    // Current forward is [0,0,1] in local frame.
+    // Angular error = cross(forward, targetDir) gives rotation axis, asin(|cross|) gives angle
+    // cross([0,0,1], targetDir) = [-targetDir.y, targetDir.x, 0]
+    const crossX = -_brainTargetDir[1];
+    const crossY = _brainTargetDir[0];
+    // crossZ = 0 (forward × something in forward plane)
+    const sinAngle = Math.sqrt(crossX * crossX + crossY * crossY);
+    const dotFwd = _brainTargetDir[2]; // dot([0,0,1], targetDir) = targetDir.z
+
+    if (sinAngle > 1e-6 && hasFuel) {
+      const angle = Math.atan2(sinAngle, dotFwd); // always positive
+
+      // Proportional torque: scale angular velocity by error, cap at MAX_ANG_SPEED
+      // Use sqrt for gentler response near target to reduce oscillation
+      const angSpeedTarget = Math.min(angle * 0.3, PHYSICS.MAX_ANG_SPEED);
+
+      // Rotation axis in local frame (normalized): [crossX/sinAngle, crossY/sinAngle, 0]
+      const axisLocalX = crossX / sinAngle;
+      const axisLocalY = crossY / sinAngle;
+
+      // Convert rotation axis from local frame to world frame
+      const axisWorld = Q.applyToVec3(ship.quat, [axisLocalX, axisLocalY, 0]);
+
+      // Set angular velocity directly (controller replaces, doesn't accumulate)
+      ship.angVel[0] = axisWorld[0] * angSpeedTarget;
+      ship.angVel[1] = axisWorld[1] * angSpeedTarget;
+      ship.angVel[2] = axisWorld[2] * angSpeedTarget;
+
+      // Torque fuel cost (proportional to how hard we're turning)
+      ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED));
+    } else if (sinAngle <= 1e-6) {
+      // Already facing target direction — kill angular velocity
+      ship.angVel[0] = 0; ship.angVel[1] = 0; ship.angVel[2] = 0;
+    }
+
+    // ── 3. Thrust: match desired speed using fuel_spend as aggressiveness ──
+    const currentSpeed = V3.length(ship.vel);
+    const speedError = desiredSpeed - currentSpeed;
+
+    if (fuelSpend > 0.01 && hasFuel) {
+      // thrust = speedError * fuelSpend, clamped to engine limits
+      const thrustMag = Math.max(-PHYSICS.THRUST, Math.min(PHYSICS.THRUST, speedError * fuelSpend));
+
+      if (Math.abs(thrustMag) > 1e-6) {
+        // Get forward direction in world frame
+        Q.applyToVec3Into(ship.quat, 0, 0, 1, _brainFwd);
+        ship.vel[0] += _brainFwd[0] * thrustMag;
+        ship.vel[1] += _brainFwd[1] * thrustMag;
+        ship.vel[2] += _brainFwd[2] * thrustMag;
+
+        // Speed cap
+        const newSpeed = V3.length(ship.vel);
+        if (newSpeed > PHYSICS.MAX_SPEED) {
+          V3.scaleMut(ship.vel, PHYSICS.MAX_SPEED / newSpeed);
+        }
+
+        // Fuel cost proportional to actual burn
+        ship.fuel = Math.max(0, ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(thrustMag) / PHYSICS.THRUST);
+        ship.isAccelerating = thrustMag > 0;
+        ship.isBraking = thrustMag < 0;
+      } else {
+        ship.isAccelerating = false;
+        ship.isBraking = false;
+      }
+    } else {
+      // Coast — no fuel used
+      ship.isAccelerating = false;
+      ship.isBraking = false;
+    }
+
+    // ── 4. Forward cannon ──
+    let firedAt = null;
+    if (fireCmd > 0 && ship.battery >= PHYSICS.WEAPON_COST && enemies && enemies.length > 0) {
+      Q.applyToVec3Into(ship.quat, 0, 0, 1, _brainFwd);
+      let bestTarget = null;
+      let bestDist = PHYSICS.WEAPON_RANGE;
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (!e.alive) continue;
+        const dx = e.pos[0] - ship.pos[0];
+        const dy = e.pos[1] - ship.pos[1];
+        const dz = e.pos[2] - ship.pos[2];
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist > PHYSICS.WEAPON_RANGE || dist < 1e-6) continue;
+        // Check cone: dot(forward, dirToEnemy) > cos(5°)
+        const dot = (_brainFwd[0] * dx + _brainFwd[1] * dy + _brainFwd[2] * dz) / dist;
+        if (dot > PHYSICS.WEAPON_CONE_COS && dist < bestDist) {
+          bestTarget = e;
+          bestDist = dist;
+        }
+      }
+      if (bestTarget) {
+        ship.battery = Math.max(0, ship.battery - PHYSICS.WEAPON_COST);
+        if (bestTarget.battery > 0) {
+          bestTarget.battery = Math.max(0, bestTarget.battery - PHYSICS.LASER_DAMAGE);
+          bestTarget.shieldFlash = 15;
+        } else {
+          bestTarget.hp -= PHYSICS.LASER_DAMAGE;
+          ship.neuralHullDamageDealt = (ship.neuralHullDamageDealt || 0) + PHYSICS.LASER_DAMAGE;
+        }
+        ship.neuralDamageDealt = (ship.neuralDamageDealt || 0) + PHYSICS.LASER_DAMAGE;
+        bestTarget.neuralDamageTaken = (bestTarget.neuralDamageTaken || 0) + PHYSICS.LASER_DAMAGE;
+        if (bestTarget.hp <= 0) bestTarget.alive = false;
+        firedAt = bestTarget;
+      }
+    }
+
+    return firedAt;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ██  Create asteroid with mass (for training compatibility)
+  // ══════════════════════════════════════════════════════════════
+  function createAsteroidWithMass(pos, radius) {
+    // Mass from volume assuming sphere + ROCK_DENSITY
+    // radius is in game units (1gu = 100m), so radius_m = radius * 100
+    const radiusM = radius * 100;
+    const volumeM3 = (4 / 3) * Math.PI * radiusM * radiusM * radiusM;
+    const massTonnes = volumeM3 * PHYSICS.ROCK_DENSITY / 1000;
+    return { pos: V3.clone(pos), radius, mass: massTonnes };
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -883,10 +1182,14 @@
     NeuralNetwork, ReLUNetwork,
     createShipState,
     createAsteroid,
+    createAsteroidWithMass,
     checkAsteroidCollisions,
     shipSimStep,
+    applyGravity,
     buildNNInputs,
+    buildBrainInputs,
     applyNNOutputs,
+    applyBrainOutputs,
     steerToward,
     scoreMatch,
     crossover,
