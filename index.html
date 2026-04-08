@@ -7802,10 +7802,17 @@
                 let outputs;
                 if (ship.userData.followCrosshair) {
                     // Trained ReLU follow brain — inputs: local target pos + local velocity
+                    // Brain trained on targets up to 50 units; cap effective target so inputs
+                    // stay within the training distribution (direction preserved).
                     const brain = getFollowBrain();
-                    const tx = cursorPos3D.x - sim.pos[0];
-                    const ty = cursorPos3D.y - sim.pos[1];
-                    const tz = cursorPos3D.z - sim.pos[2];
+                    let tx = cursorPos3D.x - sim.pos[0];
+                    let ty = cursorPos3D.y - sim.pos[1];
+                    let tz = cursorPos3D.z - sim.pos[2];
+                    const tDist = Math.sqrt(tx * tx + ty * ty + tz * tz);
+                    if (tDist > 50) {
+                        const s = 50 / tDist;
+                        tx *= s; ty *= s; tz *= s;
+                    }
                     SimCore.Q.invertInto(sim.quat, _followInvQ);
                     SimCore.Q.applyToVec3Into(_followInvQ, tx, ty, tz, _followLocalPos);
                     SimCore.Q.applyToVec3Into(_followInvQ, sim.vel[0], sim.vel[1], sim.vel[2], _followLocalVel);
