@@ -746,6 +746,118 @@
   }
 
   // ══════════════════════════════════════════════════════════════
+  // ██  Simplified brain — movement only (go to point and stop)
+  // ══════════════════════════════════════════════════════════════
+  // Inputs (6):
+  //   [0] target azimuth in local frame (/π → [-1,1])
+  //   [1] target elevation in local frame (/(π/2) → [-1,1])
+  //   [2] target distance normalized (min(dist/100, 1) → [0,1])
+  //   [3] current speed (/MAX_SPEED → [0,1])
+  //   [4] velocity azimuth in local frame (/π → [-1,1])
+  //   [5] velocity elevation in local frame (/(π/2) → [-1,1])
+  // Outputs (3):
+  //   [0] desired facing azimuth (×π)
+  //   [1] desired facing elevation (×π/2)
+  //   [2] throttle (-1=full brake, +1=full forward)
+  const _simpleBrainInputs = new Float64Array(6);
+  const _simpleBrainInvQ = [0, 0, 0, 1];
+  const _simpleBrainLocal = [0, 0, 0];
+  const _simpleBrainFwd = [0, 0, 0];
+  const _simpleBrainTargetDir = [0, 0, 0];
+
+  function buildSimpleBrainInputs(ship, targetPos) {
+    const inp = _simpleBrainInputs;
+    inp.fill(0);
+
+    Q.invertInto(ship.quat, _simpleBrainInvQ);
+
+    // Target in local polar
+    if (targetPos) {
+      const dx = targetPos[0] - ship.pos[0];
+      const dy = targetPos[1] - ship.pos[1];
+      const dz = targetPos[2] - ship.pos[2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 1e-6) {
+        Q.applyToVec3Into(_simpleBrainInvQ, dx, dy, dz, _simpleBrainLocal);
+        const lx = _simpleBrainLocal[0], ly = _simpleBrainLocal[1], lz = _simpleBrainLocal[2];
+        const horizDist = Math.sqrt(lx * lx + lz * lz);
+        inp[0] = Math.atan2(lx, lz) / Math.PI;             // target azimuth
+        inp[1] = Math.atan2(ly, horizDist) / (Math.PI / 2); // target elevation
+      }
+      inp[2] = Math.min(dist / 100, 1);                     // target distance [0,1]
+    }
+
+    // Speed
+    const speed = V3.length(ship.vel);
+    inp[3] = speed / PHYSICS.MAX_SPEED;
+
+    // Velocity direction in local frame
+    if (speed > 1e-4) {
+      Q.applyToVec3Into(_simpleBrainInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _simpleBrainLocal);
+      const lx = _simpleBrainLocal[0], ly = _simpleBrainLocal[1], lz = _simpleBrainLocal[2];
+      const horizDist = Math.sqrt(lx * lx + lz * lz);
+      inp[4] = Math.atan2(lx, lz) / Math.PI;             // vel azimuth
+      inp[5] = Math.atan2(ly, horizDist) / (Math.PI / 2); // vel elevation
+    }
+
+    return inp;
+  }
+
+  function applySimpleBrainOutputs(ship, outputs) {
+    const hasFuel = ship.fuel > 0;
+
+    // Decode outputs
+    const azimuth = outputs[0] * Math.PI;
+    const elevation = outputs[1] * (Math.PI / 2);
+    const throttle = outputs[2]; // -1 to +1
+
+    // 1. Compute desired direction in local frame
+    const cosEl = Math.cos(elevation);
+    _simpleBrainTargetDir[0] = Math.sin(azimuth) * cosEl;
+    _simpleBrainTargetDir[1] = Math.sin(elevation);
+    _simpleBrainTargetDir[2] = Math.cos(azimuth) * cosEl;
+
+    // 2. Turn toward desired direction (same logic as applyBrainOutputs)
+    const crossX = -_simpleBrainTargetDir[1];
+    const crossY = _simpleBrainTargetDir[0];
+    const sinAngle = Math.sqrt(crossX * crossX + crossY * crossY);
+    const dotFwd = _simpleBrainTargetDir[2];
+
+    if (sinAngle > 1e-6 && hasFuel) {
+      const angle = Math.atan2(sinAngle, dotFwd);
+      const angSpeedTarget = Math.min(angle * 0.3, PHYSICS.MAX_ANG_SPEED);
+      const axisLocalX = crossX / sinAngle;
+      const axisLocalY = crossY / sinAngle;
+      const axisWorld = Q.applyToVec3(ship.quat, [axisLocalX, axisLocalY, 0]);
+      ship.angVel[0] = axisWorld[0] * angSpeedTarget;
+      ship.angVel[1] = axisWorld[1] * angSpeedTarget;
+      ship.angVel[2] = axisWorld[2] * angSpeedTarget;
+      ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED));
+    } else if (sinAngle <= 1e-6) {
+      ship.angVel[0] = 0; ship.angVel[1] = 0; ship.angVel[2] = 0;
+    }
+
+    // 3. Thrust along forward axis
+    if (Math.abs(throttle) > 0.01 && hasFuel) {
+      const thrustMag = throttle * PHYSICS.THRUST;
+      Q.applyToVec3Into(ship.quat, 0, 0, 1, _simpleBrainFwd);
+      ship.vel[0] += _simpleBrainFwd[0] * thrustMag;
+      ship.vel[1] += _simpleBrainFwd[1] * thrustMag;
+      ship.vel[2] += _simpleBrainFwd[2] * thrustMag;
+      const newSpeed = V3.length(ship.vel);
+      if (newSpeed > PHYSICS.MAX_SPEED) {
+        V3.scaleMut(ship.vel, PHYSICS.MAX_SPEED / newSpeed);
+      }
+      ship.fuel = Math.max(0, ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(throttle));
+      ship.isAccelerating = throttle > 0;
+      ship.isBraking = throttle < 0;
+    } else {
+      ship.isAccelerating = false;
+      ship.isBraking = false;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // ██  Create asteroid with mass (for training compatibility)
   // ══════════════════════════════════════════════════════════════
   function createAsteroidWithMass(pos, radius) {
@@ -1190,6 +1302,8 @@
     buildBrainInputs,
     applyNNOutputs,
     applyBrainOutputs,
+    buildSimpleBrainInputs,
+    applySimpleBrainOutputs,
     steerToward,
     scoreMatch,
     crossover,

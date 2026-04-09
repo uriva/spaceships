@@ -653,6 +653,7 @@
     </div>
     
     <div id="selection-indicators"></div>
+    <div id="crosshair-dist" style="position:fixed;pointer-events:none;z-index:40;display:none;font:bold 13px monospace;color:#ffcc00;text-shadow:0 0 6px rgba(255,204,0,0.7),0 0 2px #000;white-space:nowrap;"></div>
     <div id="proximity-labels" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 30;"></div>
     
     <div class="selection-box" id="selection-box"></div>
@@ -857,14 +858,14 @@
               -0.694862,0.077150,0.124392,-0.310467,0.254735
          ]);
          
-         // --- Trained unified brain (CMA-ES, Phase 1: follow moving target) ---
-         // Linear + tanh output. 43 inputs → 5 outputs. 220 params.
-         // Inputs: ship state + target/entities as local polar coords (per BRAIN.md)
-         // Outputs: azimuth, elevation, speed, fuel_spend, fire
-         // Trained: fitness=76.8, gen=140, sep-CMA-ES, warm-start
-         const FOLLOW_TOPOLOGY = [43, 5];
+         // --- Simplified movement brain (go to point and stop) ---
+         // Linear + tanh output. 6 inputs → 3 outputs. 21 params.
+         // Inputs: target az/el/dist + speed + vel direction (all local frame)
+         // Outputs: face az/el + throttle
+         // Trained: fitness=131.5, gen=305, sep-CMA-ES, warm-start
+         const FOLLOW_TOPOLOGY = [6, 3];
          const ReLUNetwork = SimCore.ReLUNetwork;
-         const FOLLOW_GENOME = new Float64Array([0.02499591,0.34681167,0.23040465,0.16389901,0.77858315,1.06884609,1.94779045,0.03371573,0.32996122,0.12468864,-0.13914112,0.03997960,0.30054940,0.06930254,0.59625899,-0.03617315,0.36999286,0.08011133,-0.52510332,-0.12207411,-0.20301865,0.14172915,0.25061565,0.04920516,0.24575124,0.27111038,-0.01581388,-0.50507129,0.26491448,-0.09932346,-0.46001066,0.02090756,-0.40797912,0.56501430,0.38908190,-0.24961746,-0.52771841,-0.29810617,0.24708879,-0.50802331,-0.93231556,0.16625269,0.68485905,0.83123231,-0.05644208,0.37925647,0.10815439,2.09442749,-0.35559014,-0.34544871,1.14826610,-0.72243966,0.20444355,-0.17463859,-0.46453505,0.39956268,0.44763379,-0.93154863,-0.14161072,-0.94298834,0.46268347,-0.14652120,-0.69969751,-0.39429124,-0.36901742,0.36878806,-0.43282492,-0.05634019,0.05118110,0.43725495,-0.06895103,0.06917591,0.32910375,0.49695827,0.02074141,0.07413010,0.17198569,0.43912314,0.33749774,-0.83479075,-0.25217306,0.41916314,0.04331577,0.28729342,-0.20019546,0.13189355,-0.38624633,-0.11557599,-0.16454283,0.19421630,-1.87305246,-0.02203215,0.06097652,0.44341381,-1.29954544,-0.57018774,0.26051910,0.08994595,-0.77512247,0.44460815,0.43507999,-0.09011935,0.65053446,-0.08881454,0.35527632,-0.19594156,0.31326357,-0.37706702,0.68696932,-0.71789370,-0.37193634,0.31454162,0.19998041,-0.05375155,-0.18778010,0.38243014,0.54124561,-0.08972361,0.12343728,0.02628361,-0.22772756,-0.58174093,0.04827478,-0.43468654,0.06075358,-0.72105741,-0.05909716,0.19170418,-1.07006770,0.05820040,0.16143106,0.04243631,-0.83616267,0.19246991,1.28448523,0.09121429,-0.29558973,0.19489901,-0.45611867,-0.16438030,0.48403260,0.01893832,-0.17691307,0.71674327,0.46113608,-0.30536455,-0.09495424,-0.77078674,-0.84722041,0.14620926,0.27670698,0.08425337,-0.26666221,-0.39895348,-0.60888870,-0.59266990,-0.08942505,0.46363311,-0.02140428,-0.27364323,-0.17720794,0.02326641,-0.27481134,0.42781996,-0.05494576,-0.45071287,-0.59901046,0.17518696,0.11737940,0.12554790,-0.77523570,-0.66938946,-0.05934699,-0.33048167,0.51686997,-0.08880332,-0.13394672,0.60447026,0.46087081,-0.14764729,-0.34250691,-0.12017588,0.18373454,-0.17959815,-0.12797558,-0.86012057,0.16680086,-0.14030278,0.72282771,-0.19299997,-0.52580544,-0.45946305,-0.54060279,0.14155360,0.85060499,0.36256890,0.10139139,0.25302780,0.37284777,-0.09853991,-0.01013666,0.11312455,0.46973897,-0.37099940,0.14477551,0.39631453,0.21654494,0.21566467,-0.69306448,-0.18582152,-0.31691856,0.34065665,0.11869085,-0.23594270,-0.12725445,0.42263935,-0.16317261,0.87993890,-0.47721992,-0.68556592]);
+          const FOLLOW_GENOME = new Float64Array([1.22590268,-0.01878816,-0.47729116,0.09877281,-0.21567163,-0.10019231,0.24427053,1.16703589,-0.07163926,0.17115437,0.14006653,-0.31015555,-0.56946063,-0.34462147,3.53460748,-2.78056096,-0.99809387,-0.46967310,0.33852912,-0.34409857,-0.11314257]);
          
          // Singleton follow brain — created once, reused
          let _followBrain = null;
@@ -4626,6 +4627,9 @@
                     focusOnCrosshair(false);
                 }
                 
+                // Orbit around crosshair after transition
+                cameraFollowTarget = cursorOrb;
+                
                 lastCPressTime = now;
             }
             
@@ -4698,6 +4702,7 @@
             
             deselectAll();
             addToSelection(next);
+            cameraFollowTarget = next;
             focusOnSelected(false);
         }
         
@@ -4719,6 +4724,7 @@
             
             deselectAll();
             addToSelection(next);
+            cameraFollowTarget = next;
             focusOnSelected(false);
         }
         
@@ -6087,9 +6093,10 @@
         }
         
         function formatDist(units) {
-            const km = Math.round(units * KM_PER_UNIT);
+            const km = units * KM_PER_UNIT;
             if (km >= 10000) return (km / 1000).toFixed(1) + 'Kkm';
-            return km + 'km';
+            if (km >= 1) return Math.round(km) + 'km';
+            return Math.round(km * 1000) + 'm';
         }
         
         function updateFuelDisplay() {
@@ -7054,7 +7061,11 @@
                 const d = cameraPosition.distanceTo(orb.position) || 1;
                 orb.scale.setScalar(d / orbRefDist);
             }
-            scaleOrb(cursorOrb);
+            // cursorOrb: min size only — gets bigger as you approach
+            {
+                const d = cameraPosition.distanceTo(cursorOrb.position) || 1;
+                cursorOrb.scale.setScalar(Math.max(d / orbRefDist, 1));
+            }
             scaleOrb(cursorOrbSurface);
             scaleOrb(cursorOrbSurfaceBack);
             scaleOrb(cursorOrbX); scaleOrb(cursorOrbXn);
@@ -7125,16 +7136,17 @@
             
             applyCameraTransition();
             
-            // Camera follow: track the target each frame
+            // Camera follow: track the target each frame (snap, no lerp)
             if (cameraFollowTarget) {
                 // If target was removed from the scene, stop following
                 if (!cameraFollowTarget.parent) {
                     cameraFollowTarget = null;
                 } else {
-                    const delta = cameraFollowTarget.position.clone().sub(camOrbitCenter);
-                    camOrbitCenter.add(delta);
-                    cameraPosition.add(delta);
-                    cameraTarget.add(delta);
+                    const targetPos = cameraFollowTarget.position;
+                    const offset = cameraPosition.clone().sub(camOrbitCenter);
+                    camOrbitCenter.copy(targetPos);
+                    cameraPosition.copy(targetPos).add(offset);
+                    cameraTarget.copy(targetPos);
                     updateCameraPosition();
                 }
             }
@@ -7193,6 +7205,24 @@
             // Update 2D indicator AFTER render so camera matrix is final
             camera.updateMatrixWorld();
             updateSelectionIndicator();
+            
+            // Distance label — shown when camera is locked on any target
+            const distLabel = document.getElementById('crosshair-dist');
+            if (cameraFollowTarget && cameraFollowTarget.parent) {
+                const labelPos = cameraFollowTarget.position.clone().project(camera);
+                if (labelPos.z < 1) {
+                    const sx = (labelPos.x * 0.5 + 0.5) * window.innerWidth;
+                    const sy = (-labelPos.y * 0.5 + 0.5) * window.innerHeight;
+                    distLabel.textContent = formatDist(cameraPosition.distanceTo(cameraFollowTarget.position));
+                    distLabel.style.left = (sx + 14) + 'px';
+                    distLabel.style.top = (sy - 7) + 'px';
+                    distLabel.style.display = 'block';
+                } else {
+                    distLabel.style.display = 'none';
+                }
+            } else {
+                distLabel.style.display = 'none';
+            }
             }
         }
         
@@ -7764,24 +7794,13 @@
                 const sim = ship.userData.sim;
                 
                 if (ship.userData.followCrosshair) {
-                    // New unified brain — 43 inputs, 5 outputs, deterministic low-level controller
+                    // Simplified movement brain — 6 inputs, 3 outputs (no weapons)
                     const brain = getFollowBrain();
-                    if (!brain) continue; // brain.json not loaded yet
+                    if (!brain) continue;
                     const targetPos = [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z];
-                    const inputs = SimCore.buildBrainInputs(sim, targetPos, [], [], simAsteroids);
+                    const inputs = SimCore.buildSimpleBrainInputs(sim, targetPos);
                     const outputs = brain.forward(inputs);
-                    const firedAt = SimCore.applyBrainOutputs(sim, outputs, []);
-                    
-                    // Visual laser beam
-                    if (firedAt) {
-                        for (let j = 0; j < spaceships.length; j++) {
-                            if (spaceships[j].userData.sim === firedAt) {
-                                NEURO.syncFromSim(ship);
-                                fireLaserVisualOnly(ship, spaceships[j]);
-                                break;
-                            }
-                        }
-                    }
+                    SimCore.applySimpleBrainOutputs(sim, outputs);
                 } else {
                     const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
                     const outputs = ship.userData.neuralBrain.forward(inputs);
