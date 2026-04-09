@@ -1,61 +1,41 @@
-Seeding from best-genome.json (fitness: 17905.6)
-Seeded 10 individuals from best-genome.json
-3v3 fleet trainer: focus fire + coordination
-Pop: 80, opponents/eval: 3, arena: 100u radius
-Topology: 80→16→16→6, params: 1670
-Running for 30 minutes...
-GEN    1 | top:  24004.1 | avg: -13018.4 | best:  24004.1 | 8436ms | 8s/1792s left
-GEN    2 | top:  23913.0 | avg: -46535.0 | best:  24004.1 | 8333ms | 17s/1783s left
-GEN    3 | top:  18880.4 | avg: -29487.8 | best:  24004.1 | 8534ms | 25s/1775s left
-GEN    5 | top:  19115.3 | avg:  -3206.9 | best:  24004.1 | 9027ms | 43s/1757s left
-GEN   10 | top:  21494.9 | avg:   9959.0 | best:  24004.1 | 8676ms | 88s/1712s left
-GEN   15 | top:  23310.5 | avg:  10554.5 | best:  24208.7 | 8187ms | 129s/1671s left
-GEN   20 | top:  22346.7 | avg:  14172.3 | best:  24208.7 | 8652ms | 172s/1628s left
-GEN   25 | top:  22614.3 | avg:  14195.0 | best:  24208.7 | 8369ms | 215s/1585s left
-GEN   30 | top:  23093.7 | avg:  13887.5 | best:  24208.7 | 8556ms | 256s/1544s left
-GEN   35 | top:  19180.8 | avg:  12179.4 | best:  24208.7 | 7533ms | 295s/1505s left
-GEN   40 | top:  19491.5 | avg:  14251.1 | best:  24208.7 | 7325ms | 332s/1468s left
-GEN   45 | top:  20001.2 | avg:  13751.6 | best:  24208.7 | 7739ms | 372s/1428s left
-GEN   50 | top:  21053.3 | avg:  14003.1 | best:  24208.7 | 7528ms | 410s/1390s left
-GEN   55 | top:  21308.9 | avg:  15782.2 | best:  24208.7 | 7606ms | 449s/1351s left
-GEN   60 | top:  19713.4 | avg:  14785.6 | best:  24208.7 | 7349ms | 486s/1314s left
-GEN   65 | top:  20140.2 | avg:  14785.0 | best:  24208.7 | 6695ms | 521s/1279s left
-GEN   70 | top:  18681.8 | avg:  14752.4 | best:  24208.7 | 6914ms | 555s/1245s left
-GEN   75 | top:  18899.5 | avg:  13939.3 | best:  24208.7 | 6931ms | 589s/1211s left
-GEN   80 | top:  19625.9 | avg:  14971.2 | best:  24208.7 | 6609ms | 623s/1177s left
-GEN   85 | top:  20794.6 | avg:  15113.4 | best:  24208.7 | 6690ms | 657s/1143s left
-GEN   90 | top:  18871.6 | avg:  15074.3 | best:  24208.7 | 6515ms | 692s/1108s left
-GEN   95 | top:  19910.9 | avg:  15734.8 | best:  24208.7 | 7677ms | 729s/1071s left
-GEN  100 | top:  21951.2 | avg:  15737.7 | best:  24208.7 | 7071ms | 766s/1034s left
-GEN  105 | top:  20102.6 | avg:  16366.2 | best:  24208.7 | 7082ms | 802s/998s left
-GEN  110 | top:  20592.4 | avg:  15669.5 | best:  24208.7 | 7289ms | 838s/962s left
-GEN  115 | top:  19597.2 | avg:  16317.7 | best:  24208.7 | 7136ms | 874s/926s left
-GEN  120 | top:  20360.6 | avg:  16038.8 | best:  24208.7 | 7420ms | 912s/888s left
-GEN  125 | top:  20427.8 | avg:  16018.3 | best:  24208.7 | 7257ms | 949s/851s left
-GEN  130 | top:  20694.5 | avg:  16337.2 | best:  24208.7 | 7495ms | 987s/813s left
-GEN  135 | top:  20076.4 | avg:  16429.9 | best:  24208.7 | 7396ms | 1024s/776s left
-GEN  140 | top:  19415.2 | avg:  16188.9 | best:  24208.7 | 7256ms | 1061s/739s left
-GEN  145 | top:  19370.2 | avg:  16064.3 | best:  24208.7 | 7722ms | 1098s/702s left
-GEN  150 | top:  19943.8 | avg:  16523.6 | best:  24208.7 | 6671ms | 1133s/667s left
-GEN  155 | top:  20783.3 | avg:  16781.2 | best:  24208.7 | 7254ms | 1169s/631s left
-GEN  160 | top:  19599.2 | avg:  16064.8 | best:  24208.7 | 6724ms | 1205s/595s left
-GEN  165 | top:  19249.7 | avg:  16690.9 | best:  24208.7 | 7530ms | 1241s/559s left
-GEN  170 | top:  20606.6 | avg:  16884.9 | best:  24208.7 | 7194ms | 1277s/523s left
-GEN  175 | top:  20067.8 | avg:  16252.7 | best:  24208.7 | 7075ms | 1313s/487s left
-GEN  180 | top:  20744.2 | avg:  16851.4 | best:  24208.7 | 7305ms | 1349s/451s left
-GEN  185 | top:  21846.7 | avg:  16167.8 | best:  24208.7 | 7037ms | 1385s/415s left
-GEN  190 | top:  21075.6 | avg:  16770.2 | best:  24208.7 | 6879ms | 1420s/380s left
-GEN  195 | top:  20981.9 | avg:  16042.3 | best:  24208.7 | 7833ms | 1456s/344s left
-GEN  200 | top:  21598.7 | avg:  15950.2 | best:  24208.7 | 7124ms | 1493s/307s left
-GEN  205 | top:  21333.3 | avg:  16485.7 | best:  24208.7 | 7239ms | 1529s/271s left
-GEN  210 | top:  22922.9 | avg:  16411.3 | best:  24208.7 | 7318ms | 1566s/234s left
-GEN  215 | top:  20039.2 | avg:  16762.8 | best:  24208.7 | 7328ms | 1603s/197s left
-GEN  220 | top:  19235.9 | avg:  16297.6 | best:  24208.7 | 7444ms | 1640s/160s left
-GEN  225 | top:  19395.0 | avg:  16688.2 | best:  24208.7 | 7194ms | 1676s/124s left
-GEN  230 | top:  20460.3 | avg:  16825.6 | best:  24208.7 | 7071ms | 1713s/87s left
-GEN  235 | top:  19823.9 | avg:  16933.1 | best:  24208.7 | 7275ms | 1749s/51s left
-GEN  240 | top:  20881.1 | avg:  17009.9 | best:  24208.7 | 6912ms | 1784s/16s left
+Param count: 220
+No seed found, using warm-start initialization
+sep-CMA-ES Brain Trainer (Phase 1: follow moving target)
+Topology: 43->5, params: 220
+Lambda: 200, mu: 100, mueff: 52.6
+Episodes/candidate: 8, frames/episode: 3000
+Scenarios: deterministic per generation (seeded PRNG)
+Running for 60 minutes...
 
-Done: 243 generations in 1805.1s
-Global best fitness: 24208.71
-Saved to best-genome.json
+GEN    1 | top:   -387.6 | avg:  -1974.9 | best:   -387.6 | sigma: 0.1881 | 3147ms | 3s/3597s
+GEN    2 | top:    -15.7 | avg:  -1614.1 | best:    -15.7 | sigma: 0.1844 | 2664ms | 6s/3594s
+GEN    3 | top:   -130.2 | avg:  -1400.3 | best:    -15.7 | sigma: 0.1851 | 2578ms | 8s/3592s
+GEN    5 | top:    -76.4 | avg:   -867.7 | best:    -15.7 | sigma: 0.1939 | 3309ms | 15s/3585s
+GEN   10 | top:   -111.9 | avg:   -611.8 | best:    -15.7 | sigma: 0.2221 | 2891ms | 30s/3570s
+GEN   15 | top:     -9.2 | avg:   -517.2 | best:     -2.1 | sigma: 0.2675 | 3148ms | 45s/3555s
+GEN   20 | top:     39.4 | avg:   -232.4 | best:     39.4 | sigma: 0.3105 | 3059ms | 61s/3539s
+GEN   25 | top:    -12.4 | avg:   -293.5 | best:     39.4 | sigma: 0.3497 | 3341ms | 78s/3522s
+GEN   30 | top:    -30.5 | avg:   -283.7 | best:     76.8 | sigma: 0.3882 | 2950ms | 93s/3507s
+GEN   35 | top:      3.7 | avg:   -184.1 | best:     76.8 | sigma: 0.4411 | 3276ms | 109s/3491s
+GEN   40 | top:     -7.5 | avg:   -215.1 | best:     76.8 | sigma: 0.4877 | 3000ms | 125s/3475s
+GEN   45 | top:     -7.5 | avg:   -160.1 | best:     76.8 | sigma: 0.5067 | 3087ms | 140s/3460s
+GEN   50 | top:     15.8 | avg:   -128.6 | best:     76.8 | sigma: 0.5042 | 3000ms | 156s/3444s
+GEN   55 | top:      7.7 | avg:   -112.0 | best:     76.8 | sigma: 0.5349 | 3533ms | 172s/3428s
+GEN   60 | top:     -3.6 | avg:   -147.1 | best:     76.8 | sigma: 0.5570 | 3282ms | 189s/3411s
+GEN   65 | top:    -20.8 | avg:   -183.2 | best:     76.8 | sigma: 0.5670 | 3042ms | 206s/3394s
+GEN   70 | top:      7.4 | avg:    -60.1 | best:     76.8 | sigma: 0.5903 | 3058ms | 223s/3377s
+GEN   75 | top:     26.8 | avg:   -102.7 | best:     76.8 | sigma: 0.5987 | 3019ms | 239s/3361s
+GEN   80 | top:     34.5 | avg:    -88.2 | best:     76.8 | sigma: 0.5998 | 3191ms | 255s/3345s
+GEN   85 | top:    -71.2 | avg:   -304.7 | best:     76.8 | sigma: 0.5903 | 3189ms | 270s/3330s
+GEN   90 | top:      0.4 | avg:   -191.9 | best:     76.8 | sigma: 0.5833 | 2749ms | 285s/3315s
+GEN   95 | top:     36.1 | avg:    -66.7 | best:     76.8 | sigma: 0.5640 | 2930ms | 301s/3299s
+GEN  100 | top:     39.4 | avg:    -78.4 | best:     76.8 | sigma: 0.5697 | 3068ms | 317s/3283s
+GEN  105 | top:     33.6 | avg:    -86.7 | best:     76.8 | sigma: 0.5524 | 3205ms | 332s/3268s
+GEN  110 | top:     21.7 | avg:   -236.8 | best:     76.8 | sigma: 0.5627 | 3060ms | 347s/3253s
+GEN  115 | top:     39.3 | avg:   -120.3 | best:     76.8 | sigma: 0.5503 | 2957ms | 362s/3238s
+GEN  120 | top:     40.0 | avg:    -92.8 | best:     76.8 | sigma: 0.5200 | 2886ms | 377s/3223s
+GEN  125 | top:     39.8 | avg:    -66.2 | best:     76.8 | sigma: 0.5317 | 3007ms | 392s/3208s
+GEN  130 | top:     16.5 | avg:   -114.7 | best:     76.8 | sigma: 0.5366 | 3073ms | 407s/3193s
+GEN  135 | top:     36.3 | avg:   -132.0 | best:     76.8 | sigma: 0.5257 | 2956ms | 422s/3178s
+GEN  140 | top:     53.1 | avg:    -67.6 | best:     76.8 | sigma: 0.5310 | 3168ms | 437s/3163s
+GEN  145 | top:     23.0 | avg:   -187.4 | best:     76.8 | sigma: 0.5616 | 3149ms | 452s/3148s

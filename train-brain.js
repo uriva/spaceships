@@ -1,24 +1,26 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write
 // train-brain.js — sep-CMA-ES trainer for unified ship brain (BRAIN.md Phase 1)
-// Scenario: follow a moving target in an asteroid field.
-// Network: [43, 32, 32, 5] ReLU hidden, tanh output. 2629 params.
-// Fitness: death=0, else proximity_sum + fuel_bonus.
+// Scenario: follow a moving target (no asteroid deaths — learn navigation first).
+// Network: [43, 5] linear + tanh output. 220 params.
+// Warm-start: hand-coded weights that approximately face and move toward target.
+// Fitness: facing_reward * 50 + closing_distance * 100 (incremental, per-frame).
 // Key: all candidates in one generation face IDENTICAL scenarios (seeded PRNG).
 
 const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.url).pathname);
 (new Function(simCoreSrc))();
 const {
   V3, Q, PHYSICS, ReLUNetwork,
-  createShipState, createAsteroidWithMass, checkAsteroidCollisions,
+  createShipState, createAsteroidWithMass,
   shipSimStep, applyGravity, buildBrainInputs, applyBrainOutputs,
 } = globalThis.SimCore;
 
 // ── Config ──
-const TOPOLOGY = [43, 32, 32, 5];
+const TOPOLOGY = [43, 5];
 const OUTPUT_FILE = Deno.args[0] || 'brain.json';
 const RUN_MINUTES = parseFloat(Deno.args[1] || '60');
-const SEED_FILE = Deno.args[2] || 'brain.json';
-const EVALS_PER_CANDIDATE = 12;
+const FRESH = Deno.args.includes('--fresh');
+const SEED_FILE = FRESH ? '__noseed__' : (Deno.args[2] || 'brain.json');
+const EVALS_PER_CANDIDATE = 8;
 const EPISODE_FRAMES = 3000; // 50 sec at 60fps
 
 // sep-CMA-ES hyperparameters
@@ -68,7 +70,7 @@ function makeRng(seed) {
 // ██  sep-CMA-ES State
 // ══════════════════════════════════════════════════════════════
 const mean = new Float64Array(N);
-let sigma = 0.5;
+let sigma = 0.2;
 const pc = new Float64Array(N);
 const ps = new Float64Array(N);
 const diagC = new Float64Array(N);
@@ -88,16 +90,47 @@ try {
 } catch (_) { /* no seed */ }
 
 if (!seeded) {
-  let idx = 0;
-  for (let li = 0; li < TOPOLOGY.length - 1; li++) {
-    const fanIn = TOPOLOGY[li];
-    const scale = Math.sqrt(2.0 / fanIn);
-    const nW = TOPOLOGY[li] * TOPOLOGY[li + 1];
-    for (let j = 0; j < nW; j++) mean[idx++] = (Math.random() * 2 - 1) * scale;
-    const nB = TOPOLOGY[li + 1];
-    for (let j = 0; j < nB; j++) mean[idx++] = 0;
-  }
-  console.log('No seed found, using He initialization');
+  // Warm-start: hand-coded weights that approximately follow the target.
+  // For [43, 5] topology, weights[0] is 5×43 = 215 weights, then 5 biases = 220 total.
+  // Weight layout: output o, input i → index o*43 + i
+  //
+  // Input layout (from buildBrainInputs):
+  //   [0-5]: own state (hull, battery, fuel, speed, vel_az, vel_el)
+  //   [6]: target azimuth (local, /π)    — range [-1, 1]
+  //   [7]: target elevation (local, /(π/2)) — range [-1, 1]
+  //   [8]: target distance (1/(1+d/50)) — range (0, 1], higher=closer
+  //   [9-17]: enemies, [18-26]: friends, [27-42]: asteroids
+  //
+  // Output layout (from applyBrainOutputs):
+  //   [0]: desired azimuth (tanh → -π to π)
+  //   [1]: desired elevation (tanh → -π/2 to π/2)
+  //   [2]: desired speed (tanh → 0 to MAX_SPEED)
+  //   [3]: fuel spend rate (tanh → 0 to 1)
+  //   [4]: fire (>0 = shoot)
+  //
+  // Strategy: face the target direction, move toward it at moderate speed.
+  mean.fill(0); // all zero baseline
+
+  // Output 0 (azimuth) ← input 6 (target azimuth): direct pass-through
+  mean[0 * 43 + 6] = 1.5;  // weight: target_az → desired_az (slightly over 1 for responsiveness)
+
+  // Output 1 (elevation) ← input 7 (target elevation): direct pass-through
+  mean[1 * 43 + 7] = 1.5;
+
+  // Output 2 (desired speed): want speed when target is far (input 8 low), less when close
+  // speed = tanh(bias - weight * closeness) → when far (closeness→0): tanh(bias) → moderate speed
+  // when very close (closeness→1): tanh(bias - weight) → low speed
+  const biasIdx = 43 * 5; // biases start after all weights
+  mean[2 * 43 + 8] = -1.5;   // negative weight on closeness (closer = slower)
+  mean[biasIdx + 2] = 1.0;   // positive bias (default: want to move)
+
+  // Output 3 (fuel spend): moderate positive bias — willing to burn fuel
+  mean[biasIdx + 3] = 0.5;
+
+  // Output 4 (fire): negative bias — don't fire during follow
+  mean[biasIdx + 4] = -1.0;
+
+  console.log('No seed found, using warm-start initialization');
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -166,7 +199,7 @@ function generateTargetTrajectory(startDist, rng) {
   return positions;
 }
 
-// Generate 12 episode configs (deterministic from master seed)
+// Generate 8 episode configs (deterministic from master seed)
 function generateEpisodeConfigs(masterSeed) {
   const rng = makeRng(masterSeed);
   const configs = [];
@@ -174,45 +207,29 @@ function generateEpisodeConfigs(masterSeed) {
   // 4 short-range (target 10-50 units)
   for (let i = 0; i < 4; i++) {
     const targetDist = 10 + rng() * 40;
-    const fuel = 1000 + rng() * 1500;
-    const asteroidCount = 3 + Math.floor(rng() * 6);
+    const fuel = 2500;
+    const asteroidCount = 2 + Math.floor(rng() * 4);
     const asteroids = generateAsteroidsDet(asteroidCount, rng);
     const targetPositions = generateTargetTrajectory(targetDist, rng);
-    // Ship initial state
     const shipQuat = [rng() - 0.5, rng() - 0.5, rng() - 0.5, rng() - 0.5];
     const ql = Math.sqrt(shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2);
     for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
-    const initSpeed = rng() * 0.5 * PHYSICS.MAX_SPEED;
+    const initSpeed = rng() * 0.3 * PHYSICS.MAX_SPEED;
     const vDir = rngDir(rng);
     const shipVel = [vDir[0] * initSpeed, vDir[1] * initSpeed, vDir[2] * initSpeed];
     configs.push({ fuel, asteroids, targetPositions, shipQuat, shipVel });
   }
-  // 4 long-range (target 100-300 units)
+  // 4 long-range (target 80-250 units)
   for (let i = 0; i < 4; i++) {
-    const targetDist = 100 + rng() * 200;
-    const fuel = 1000 + rng() * 1500;
-    const asteroidCount = 3 + Math.floor(rng() * 6);
+    const targetDist = 80 + rng() * 170;
+    const fuel = 2500;
+    const asteroidCount = 2 + Math.floor(rng() * 4);
     const asteroids = generateAsteroidsDet(asteroidCount, rng);
     const targetPositions = generateTargetTrajectory(targetDist, rng);
     const shipQuat = [rng() - 0.5, rng() - 0.5, rng() - 0.5, rng() - 0.5];
     const ql = Math.sqrt(shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2);
     for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
-    const initSpeed = rng() * 0.5 * PHYSICS.MAX_SPEED;
-    const vDir = rngDir(rng);
-    const shipVel = [vDir[0] * initSpeed, vDir[1] * initSpeed, vDir[2] * initSpeed];
-    configs.push({ fuel, asteroids, targetPositions, shipQuat, shipVel });
-  }
-  // 4 low-fuel (target 10-150 units, fuel 300-800)
-  for (let i = 0; i < 4; i++) {
-    const targetDist = 10 + rng() * 140;
-    const fuel = 300 + rng() * 500;
-    const asteroidCount = 3 + Math.floor(rng() * 6);
-    const asteroids = generateAsteroidsDet(asteroidCount, rng);
-    const targetPositions = generateTargetTrajectory(targetDist, rng);
-    const shipQuat = [rng() - 0.5, rng() - 0.5, rng() - 0.5, rng() - 0.5];
-    const ql = Math.sqrt(shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2);
-    for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
-    const initSpeed = rng() * 0.5 * PHYSICS.MAX_SPEED;
+    const initSpeed = rng() * 0.3 * PHYSICS.MAX_SPEED;
     const vDir = rngDir(rng);
     const shipVel = [vDir[0] * initSpeed, vDir[1] * initSpeed, vDir[2] * initSpeed];
     configs.push({ fuel, asteroids, targetPositions, shipQuat, shipVel });
@@ -228,13 +245,22 @@ const _targetPos = [0, 0, 0]; // reusable buffer
 function runEpisode(brain, config) {
   const ship = createShipState('alpha');
   ship.fuel = config.fuel;
-  const fuelInitial = config.fuel;
   ship.quat[0] = config.shipQuat[0]; ship.quat[1] = config.shipQuat[1];
   ship.quat[2] = config.shipQuat[2]; ship.quat[3] = config.shipQuat[3];
   ship.vel[0] = config.shipVel[0]; ship.vel[1] = config.shipVel[1]; ship.vel[2] = config.shipVel[2];
 
   const { asteroids, targetPositions } = config;
-  let proximity = 0;
+
+  // Fitness components (incremental, per-frame):
+  // 1. facing: dot(ship.forward, dirToTarget) — rewards turning toward target [-1, 1]
+  // 2. closing: (prevDist - curDist) — rewards reducing distance per frame
+  // No asteroid death — learn navigation first, avoidance later.
+
+  let facingSum = 0;
+  let closingSum = 0;
+  let prevDist = V3.distanceTo(ship.pos, [
+    targetPositions[0], targetPositions[1], targetPositions[2]
+  ]);
 
   for (let frame = 0; frame < EPISODE_FRAMES; frame++) {
     _targetPos[0] = targetPositions[frame * 3];
@@ -247,16 +273,32 @@ function runEpisode(brain, config) {
     applyGravity(ship, asteroids, 1);
     shipSimStep(ship);
 
-    if (checkAsteroidCollisions(ship, asteroids)) {
-      return 0; // death = 0
+    const dist = V3.distanceTo(ship.pos, _targetPos);
+
+    // Facing reward: dot(forward, dirToTarget)
+    if (dist > 0.01) {
+      const fwd = Q.applyToVec3(ship.quat, [0, 0, 1]);
+      const dx = _targetPos[0] - ship.pos[0];
+      const dy = _targetPos[1] - ship.pos[1];
+      const dz = _targetPos[2] - ship.pos[2];
+      facingSum += (fwd[0] * dx + fwd[1] * dy + fwd[2] * dz) / dist;
     }
 
-    const dist = V3.distanceTo(ship.pos, _targetPos);
-    proximity += 1 / (1 + dist);
+    // Closing reward: positive when getting closer
+    closingSum += prevDist - dist;
+    prevDist = dist;
   }
 
-  const fuelBonus = (ship.fuel / fuelInitial) * 50;
-  return proximity + fuelBonus;
+  // Normalize per frame, scale to nice numbers
+  const facingAvg = facingSum / EPISODE_FRAMES; // range [-1, 1]
+  const initDist = V3.distanceTo([0,0,0], [
+    targetPositions[0], targetPositions[1], targetPositions[2]
+  ]);
+  const closingNorm = initDist > 1 ? closingSum / initDist : closingSum;
+
+  // facing: 50 weight — turn toward target (learning step 1)
+  // closing: 100 weight — actually get there (learning step 2)
+  return facingAvg * 50 + closingNorm * 100;
 }
 
 // ══════════════════════════════════════════════════════════════
