@@ -18,7 +18,7 @@ const TOPOLOGY = [6, 3];
 const OUTPUT_FILE = Deno.args[0] || 'brain.json';
 const RUN_MINUTES = parseFloat(Deno.args[1] || '60');
 const FRESH = Deno.args.includes('--fresh');
-const SEED_FILE = FRESH ? '__noseed__' : (Deno.args[2] || 'brain-stage1.json');
+const SEED_FILE = FRESH ? '__noseed__' : (Deno.args[2] || 'brain.json');
 const EVALS_PER_CANDIDATE = 8;
 const EPISODE_FRAMES = 3000; // 50 sec at 60fps
 
@@ -81,7 +81,7 @@ try {
     for (let i = 0; i < N; i++) mean[i] = seedData.genome[i];
     seeded = true;
     sigma = seedData.optimizer?.sigma || 0.3;
-    sigma = Math.max(sigma, 0.05);
+    sigma = Math.min(Math.max(sigma, 0.05), 0.3);
     console.log(`Seeded from ${SEED_FILE} (fitness ${seedData.fitness?.toFixed(1)}, gen ${seedData.generation}, sigma=${sigma.toFixed(4)})`);
   }
 } catch (_) { /* no seed */ }
@@ -187,16 +187,18 @@ function runEpisode(brain, config) {
     shipSimStep(ship);
   }
 
-  const finalDist = V3.distanceTo(ship.pos, targetPos);
+  const rawDist = V3.distanceTo(ship.pos, targetPos);
+  const DEAD_ZONE = 5; // 500m — inside this, distance counts as 0
+  const finalDist = Math.max(0, rawDist - DEAD_ZONE);
   const finalSpeed = V3.length(ship.vel);
 
-  // Stage 2 fitness: arrive AND stop efficiently
+  // Stage 3 fitness: arrive within dead zone AND stop efficiently
   // 1. Proximity at end (up to 100) — must still navigate
   // 2. Remaining fuel (up to 50) — penalizes orbiting / wasted thrust
   // 3. Stopping bonus (up to 30) — reward being still near target
   const proximityBonus = 100 / (1 + finalDist);
   const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 50;
-  const stoppingBonus = finalDist < 10
+  const stoppingBonus = rawDist < 10
     ? Math.max(0, 1 - finalSpeed / (PHYSICS.MAX_SPEED * 0.3)) * 30
     : 0;
 

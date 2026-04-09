@@ -117,6 +117,7 @@
     WEAPON_COST: 8,
     LASER_DAMAGE: 10,
     BATTERY_RECHARGE: 0.02,
+    TARGET_DEAD_ZONE: 5,  // 500m — inside this radius, target distance reads as 0
     MAX_ANG_SPEED: 0.05,         // rad/frame cap for neural torque
     WEAPON_RANGE: 200,          // units (~20 km)
     WEAPON_CONE_COS: Math.cos(5 * Math.PI / 180),  // cos(5°) half-angle cone
@@ -777,6 +778,7 @@
       const dy = targetPos[1] - ship.pos[1];
       const dz = targetPos[2] - ship.pos[2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const deadDist = Math.max(0, dist - PHYSICS.TARGET_DEAD_ZONE); // 0 inside dead zone
       if (dist > 1e-6) {
         Q.applyToVec3Into(_simpleBrainInvQ, dx, dy, dz, _simpleBrainLocal);
         const lx = _simpleBrainLocal[0], ly = _simpleBrainLocal[1], lz = _simpleBrainLocal[2];
@@ -784,7 +786,7 @@
         inp[0] = Math.atan2(lx, lz) / Math.PI;             // target azimuth
         inp[1] = Math.atan2(ly, horizDist) / (Math.PI / 2); // target elevation
       }
-      inp[2] = Math.min(dist / 100, 1);                     // target distance [0,1]
+      inp[2] = Math.min(deadDist / 100, 1);                 // target distance [0,1], 0 inside dead zone
     }
 
     // Speed
