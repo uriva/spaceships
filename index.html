@@ -862,10 +862,10 @@
          // Linear + tanh output. 6 inputs → 3 outputs. 21 params.
          // Inputs: target az/el/dist + speed + vel direction (all local frame)
          // Outputs: face az/el + throttle
-          // Trained: fitness=179.0, gen=719, sep-CMA-ES, stage3 (dead zone 500m)
+          // Trained: fitness=138.2, gen=702, sep-CMA-ES, stage4 (stay-still + navigate)
           const FOLLOW_TOPOLOGY = [6, 3];
           const ReLUNetwork = SimCore.ReLUNetwork;
-           const FOLLOW_GENOME = new Float64Array([4.52056770,-0.07259651,-0.36124588,-1.06346944,-1.53842372,0.00841352,-0.32482869,5.18265024,-0.35032286,0.10687886,0.45697173,-1.52769036,0.22328877,0.28051313,3.50057017,-1.62402588,-1.25278591,-0.09651115,0.87922604,-0.05599109,-0.94256049]);
+           const FOLLOW_GENOME = new Float64Array([4.47842968,-0.38442329,-0.43573441,-1.37366391,-1.67493200,0.03172347,-0.32169145,6.16546421,-0.52716677,0.56932898,0.44349834,-1.98513824,-1.05512248,-0.14135307,1.90559635,0.10254265,-0.42324349,0.06427320,0.79134499,0.31022781,-0.88615747]);
          
          // Singleton follow brain — created once, reused
          let _followBrain = null;

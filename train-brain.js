@@ -147,11 +147,22 @@ function generateEpisodeConfigs(masterSeed) {
   const rng = makeRng(masterSeed);
   const configs = [];
 
-  // 4 short-range (10-50 units), 4 long-range (50-200 units)
-  const ranges = [[10, 50], [10, 50], [10, 50], [10, 50],
-                  [50, 200], [50, 200], [50, 200], [50, 200]];
+  // Stage 4: mix of "already here" + navigation scenarios
+  // 4 near/at-target (0-3 units, some with drift), 2 short-range, 2 long-range
+  const scenarios = [
+    // Near target: distance 0-3, higher initial velocity to test braking
+    { distRange: [0, 3], speedMul: 0.5 },
+    { distRange: [0, 3], speedMul: 0.5 },
+    { distRange: [0, 1], speedMul: 0.3 },
+    { distRange: [0, 1], speedMul: 0.1 },
+    // Navigation (must not regress)
+    { distRange: [10, 50], speedMul: 0.2 },
+    { distRange: [10, 50], speedMul: 0.2 },
+    { distRange: [50, 200], speedMul: 0.2 },
+    { distRange: [50, 200], speedMul: 0.2 },
+  ];
 
-  for (const [lo, hi] of ranges) {
+  for (const { distRange: [lo, hi], speedMul } of scenarios) {
     const targetDist = lo + rng() * (hi - lo);
     const dir = rngDir(rng);
     const targetPos = [dir[0] * targetDist, dir[1] * targetDist, dir[2] * targetDist];
@@ -159,11 +170,11 @@ function generateEpisodeConfigs(masterSeed) {
     const shipQuat = [rng() - 0.5, rng() - 0.5, rng() - 0.5, rng() - 0.5];
     const ql = Math.sqrt(shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2);
     for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
-    // Small random initial velocity
-    const initSpeed = rng() * 0.2 * PHYSICS.MAX_SPEED;
+    // Initial velocity (higher for near-target to test braking)
+    const initSpeed = rng() * speedMul * PHYSICS.MAX_SPEED;
     const vDir = rngDir(rng);
     const shipVel = [vDir[0] * initSpeed, vDir[1] * initSpeed, vDir[2] * initSpeed];
-    configs.push({ targetPos, shipQuat, shipVel });
+    configs.push({ targetPos, shipQuat, shipVel, nearTarget: lo < 5 });
   }
   return configs;
 }
@@ -192,10 +203,15 @@ function runEpisode(brain, config) {
   const finalDist = Math.max(0, rawDist - DEAD_ZONE);
   const finalSpeed = V3.length(ship.vel);
 
-  // Stage 3 fitness: arrive within dead zone AND stop efficiently
-  // 1. Proximity at end (up to 100) — must still navigate
-  // 2. Remaining fuel (up to 50) — penalizes orbiting / wasted thrust
-  // 3. Stopping bonus (up to 30) — reward being still near target
+  if (config.nearTarget) {
+    // Stage 4 near-target: pure fuel + staying still
+    // Max 100: fuel up to 70, stillness up to 30
+    const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 70;
+    const stoppingBonus = Math.max(0, 1 - finalSpeed / (PHYSICS.MAX_SPEED * 0.1)) * 30;
+    return fuelBonus + stoppingBonus;
+  }
+
+  // Stage 3 fitness for navigation episodes: arrive within dead zone AND stop efficiently
   const proximityBonus = 100 / (1 + finalDist);
   const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 50;
   const stoppingBonus = rawDist < 10
@@ -344,7 +360,7 @@ function saveCheckpoint(genNum) {
     fitness: globalBestFitness,
     genome: globalBestGenome,
     generation: genNum,
-    scenario: 'stage2-stop-at-target',
+    scenario: 'stage4-stay-still',
     optimizer: { name: 'sep-CMA-ES', lambda: LAMBDA, mu: MU, sigma, N },
     config: { EPISODE_FRAMES, EVALS_PER_CANDIDATE },
     trainedAt: new Date().toISOString(),
