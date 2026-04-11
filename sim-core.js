@@ -2,7 +2,7 @@
 // Works in browser (<script>) and Deno (eval/new Function)
 // No Three.js dependency — pure math on plain arrays
 (function () {
-  'use strict';
+  "use strict";
 
   // ══════════════════════════════════════════════════════════════
   // ██  Vector3 utilities — operate on [x, y, z] arrays
@@ -24,10 +24,30 @@
       const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
       return Math.sqrt(dx * dx + dy * dy + dz * dz);
     },
-    addMut: (a, b) => { a[0] += b[0]; a[1] += b[1]; a[2] += b[2]; return a; },
-    scaleMut: (v, s) => { v[0] *= s; v[1] *= s; v[2] *= s; return v; },
-    set: (v, x, y, z) => { v[0] = x; v[1] = y; v[2] = z; return v; },
-    copy: (dst, src) => { dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; return dst; },
+    addMut: (a, b) => {
+      a[0] += b[0];
+      a[1] += b[1];
+      a[2] += b[2];
+      return a;
+    },
+    scaleMut: (v, s) => {
+      v[0] *= s;
+      v[1] *= s;
+      v[2] *= s;
+      return v;
+    },
+    set: (v, x, y, z) => {
+      v[0] = x;
+      v[1] = y;
+      v[2] = z;
+      return v;
+    },
+    copy: (dst, src) => {
+      dst[0] = src[0];
+      dst[1] = src[1];
+      dst[2] = src[2];
+      return dst;
+    },
   };
 
   // ══════════════════════════════════════════════════════════════
@@ -37,14 +57,27 @@
     create: () => [0, 0, 0, 1],
     clone: (q) => [q[0], q[1], q[2], q[3]],
     normalize: (q) => {
-      const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+      const l = Math.sqrt(
+        q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3],
+      );
       if (l < 1e-12) return [0, 0, 0, 1];
       return [q[0] / l, q[1] / l, q[2] / l, q[3] / l];
     },
     normalizeMut: (q) => {
-      const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-      if (l < 1e-12) { q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 1; return q; }
-      q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l;
+      const l = Math.sqrt(
+        q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3],
+      );
+      if (l < 1e-12) {
+        q[0] = 0;
+        q[1] = 0;
+        q[2] = 0;
+        q[3] = 1;
+        return q;
+      }
+      q[0] /= l;
+      q[1] /= l;
+      q[2] /= l;
+      q[3] /= l;
       return q;
     },
     // a * b (Hamilton product)
@@ -56,7 +89,9 @@
     ],
     invert: (q) => {
       const d = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-      return d > 1e-12 ? [-q[0] / d, -q[1] / d, -q[2] / d, q[3] / d] : [0, 0, 0, 1];
+      return d > 1e-12
+        ? [-q[0] / d, -q[1] / d, -q[2] / d, q[3] / d]
+        : [0, 0, 0, 1];
     },
     fromAxisAngle: (axis, angle) => {
       const ha = angle * 0.5, s = Math.sin(ha);
@@ -89,8 +124,17 @@
     // Invert quaternion, write into pre-allocated out[4]
     invertInto: (q, out) => {
       const d = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-      if (d > 1e-12) { out[0] = -q[0]/d; out[1] = -q[1]/d; out[2] = -q[2]/d; out[3] = q[3]/d; }
-      else { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; }
+      if (d > 1e-12) {
+        out[0] = -q[0] / d;
+        out[1] = -q[1] / d;
+        out[2] = -q[2] / d;
+        out[3] = q[3] / d;
+      } else {
+        out[0] = 0;
+        out[1] = 0;
+        out[2] = 0;
+        out[3] = 1;
+      }
     },
     // Set quaternion from random values and normalize — for random orientation
     setRandomMut: (q) => {
@@ -117,14 +161,14 @@
     WEAPON_COST: 8,
     LASER_DAMAGE: 10,
     BATTERY_RECHARGE: 0.02,
-    TARGET_DEAD_ZONE: 5,  // 500m — inside this radius, target distance reads as 0
-    MAX_ANG_SPEED: 0.05,         // rad/frame cap for neural torque
-    WEAPON_RANGE: 200,          // units (~20 km)
-    WEAPON_CONE_COS: Math.cos(5 * Math.PI / 180),  // cos(5°) half-angle cone
+    TARGET_DEAD_ZONE: 5, // 500m — inside this radius, target distance reads as 0
+    MAX_ANG_SPEED: 0.05, // rad/frame cap for neural torque
+    WEAPON_RANGE: 200, // units (~20 km)
+    WEAPON_CONE_COS: Math.cos(5 * Math.PI / 180), // cos(5°) half-angle cone
     // Gravity: G_real converted to game units (gu distance, tonnes mass, frames time)
     // G_game = G_real × 1000 / 1e6 / 3600 = ~1.854e-17
     G_GAME: 6.674e-11 * 1000 / 1e6 / 3600,
-    ROCK_DENSITY: 2500,       // kg/m³ — typical stony asteroid
+    ROCK_DENSITY: 2500, // kg/m³ — typical stony asteroid
   };
 
   // ══════════════════════════════════════════════════════════════
@@ -135,7 +179,7 @@
       this.layers = layers;
       this.weights = [];
       this.biases = [];
-      this._bufs = [];   // pre-allocated activation buffers per layer
+      this._bufs = []; // pre-allocated activation buffers per layer
       for (let i = 0; i < layers.length - 1; i++) {
         this.weights.push(new Float64Array(layers[i] * layers[i + 1]));
         this.biases.push(new Float64Array(layers[i + 1]));
@@ -163,8 +207,12 @@
       const g = new Float64Array(this.paramCount);
       let idx = 0;
       for (let i = 0; i < this.layers.length - 1; i++) {
-        for (let j = 0; j < this.weights[i].length; j++) g[idx++] = this.weights[i][j];
-        for (let j = 0; j < this.biases[i].length; j++) g[idx++] = this.biases[i][j];
+        for (let j = 0; j < this.weights[i].length; j++) {
+          g[idx++] = this.weights[i][j];
+        }
+        for (let j = 0; j < this.biases[i].length; j++) {
+          g[idx++] = this.biases[i][j];
+        }
       }
       return g;
     }
@@ -226,8 +274,12 @@
       const g = new Float64Array(this.paramCount);
       let idx = 0;
       for (let i = 0; i < this.layers.length - 1; i++) {
-        for (let j = 0; j < this.weights[i].length; j++) g[idx++] = this.weights[i][j];
-        for (let j = 0; j < this.biases[i].length; j++) g[idx++] = this.biases[i][j];
+        for (let j = 0; j < this.weights[i].length; j++) {
+          g[idx++] = this.weights[i][j];
+        }
+        for (let j = 0; j < this.biases[i].length; j++) {
+          g[idx++] = this.biases[i][j];
+        }
       }
       return g;
     }
@@ -240,7 +292,7 @@
         const nIn = this.layers[i];
         const nOut = this.layers[i + 1];
         const next = this._bufs[i];
-        const isOutput = (i === lastLayer);
+        const isOutput = i === lastLayer;
         for (let o = 0; o < nOut; o++) {
           let sum = this.biases[i][o];
           for (let j = 0; j < nIn; j++) {
@@ -269,7 +321,7 @@
       maxBattery: PHYSICS.MAX_BATTERY,
       fuel: PHYSICS.MAX_FUEL,
       maxFuel: PHYSICS.MAX_FUEL,
-      team,                  // 'alpha' or 'omega'
+      team, // 'alpha' or 'omega'
       alive: true,
       neuralDamageDealt: 0,
       neuralDamageTaken: 0,
@@ -295,8 +347,10 @@
       const dq = Q.fromAxisAngle(axis, angSpeed);
       // premultiply: dq * ship.quat
       const newQ = Q.multiply(dq, ship.quat);
-      ship.quat[0] = newQ[0]; ship.quat[1] = newQ[1];
-      ship.quat[2] = newQ[2]; ship.quat[3] = newQ[3];
+      ship.quat[0] = newQ[0];
+      ship.quat[1] = newQ[1];
+      ship.quat[2] = newQ[2];
+      ship.quat[3] = newQ[3];
       Q.normalizeMut(ship.quat);
     }
 
@@ -305,7 +359,10 @@
 
     // Battery recharge
     if (ship.battery < ship.maxBattery) {
-      ship.battery = Math.min(ship.maxBattery, ship.battery + PHYSICS.BATTERY_RECHARGE);
+      ship.battery = Math.min(
+        ship.maxBattery,
+        ship.battery + PHYSICS.BATTERY_RECHARGE,
+      );
       if (ship.battery > PHYSICS.WEAPON_COST && ship.weaponsDepleted) {
         ship.weaponsDepleted = false;
       }
@@ -369,7 +426,7 @@
     inputs[5] = ship.battery / ship.maxBattery;
     inputs[6] = ship.hp / ship.maxHp;
     inputs[7] = ship.fuel / ship.maxFuel;
-    inputs[8] = ship.neuralDamageTaken / ship.maxHp;   // how hurt am I (0→1+)
+    inputs[8] = ship.neuralDamageTaken / ship.maxHp; // how hurt am I (0→1+)
     inputs[9] = Math.min(ship.neuralDamageDealt / 100, 2); // how effective am I (scaled)
 
     // Nearest 6 visible ships (9 each = 54 inputs)
@@ -384,15 +441,21 @@
       const dist = Math.sqrt(r0 * r0 + r1 * r1 + r2 * r2);
       if (nOthers < _othersBuf.length) {
         const e = _othersBuf[nOthers];
-        e.ship = other; e.dist = dist; e.r0 = r0; e.r1 = r1; e.r2 = r2;
+        e.ship = other;
+        e.dist = dist;
+        e.r0 = r0;
+        e.r1 = r1;
+        e.r2 = r2;
       } else {
         _othersBuf.push({ ship: other, dist, r0, r1, r2 });
       }
       nOthers++;
     }
     // Sort only the populated portion
-    const sortSlice = _othersBuf.length > nOthers ? _othersBuf.slice(0, nOthers) : _othersBuf;
-    if (sortSlice.length !== nOthers) { sortSlice.length = nOthers; }
+    const sortSlice = _othersBuf.length > nOthers
+      ? _othersBuf.slice(0, nOthers)
+      : _othersBuf;
+    if (sortSlice.length !== nOthers) sortSlice.length = nOthers;
     // In-place partial sort: we only need top-6, but full sort is fine for <=20 ships
     for (let i = 0; i < nOthers - 1; i++) {
       for (let j = i + 1; j < nOthers; j++) {
@@ -431,7 +494,7 @@
       // Simple insertion-sort for nearest 4 — avoid allocating temp arrays
       const a4 = [null, null, null, null];
       const a4d = [Infinity, Infinity, Infinity, Infinity];
-      const a4r = [[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
+      const a4r = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
       for (let ai = 0; ai < asteroids.length; ai++) {
         const a = asteroids[ai];
         const r0 = a.pos[0] - ship.pos[0];
@@ -442,8 +505,14 @@
         for (let k = 0; k < 4; k++) {
           if (dist < a4d[k]) {
             // Shift down
-            for (let m = 3; m > k; m--) { a4[m] = a4[m-1]; a4d[m] = a4d[m-1]; a4r[m] = a4r[m-1]; }
-            a4[k] = a; a4d[k] = dist; a4r[k] = [r0, r1, r2];
+            for (let m = 3; m > k; m--) {
+              a4[m] = a4[m - 1];
+              a4d[m] = a4d[m - 1];
+              a4r[m] = a4r[m - 1];
+            }
+            a4[k] = a;
+            a4d[k] = dist;
+            a4r[k] = [r0, r1, r2];
             break;
           }
         }
@@ -452,7 +521,13 @@
       for (let i = 0; i < 4; i++) {
         const base = 64 + i * 4;
         if (a4[i]) {
-          Q.applyToVec3Into(_invQuatTmp, a4r[i][0], a4r[i][1], a4r[i][2], _localTmp);
+          Q.applyToVec3Into(
+            _invQuatTmp,
+            a4r[i][0],
+            a4r[i][1],
+            a4r[i][2],
+            _localTmp,
+          );
           inputs[base + 0] = _localTmp[0] / 200;
           inputs[base + 1] = _localTmp[1] / 200;
           inputs[base + 2] = _localTmp[2] / 200;
@@ -471,7 +546,7 @@
   // gravityMultiplier defaults to 1 (real gravity)
   function applyGravity(ship, asteroids, gravityMultiplier) {
     if (!asteroids || asteroids.length === 0) return;
-    const gm = (gravityMultiplier || 1);
+    const gm = gravityMultiplier || 1;
     const G = PHYSICS.G_GAME * gm;
     for (let i = 0; i < asteroids.length; i++) {
       const a = asteroids[i];
@@ -505,13 +580,27 @@
   // Returns [azimuth/π, elevation/(π/2), 1/(1+dist/50)]
   // If distance is 0 (no entity), returns [0, 0, 0]
   function _worldToLocalPolar(shipQuat, invQuat, worldDelta, out) {
-    const dist = Math.sqrt(worldDelta[0] * worldDelta[0] + worldDelta[1] * worldDelta[1] + worldDelta[2] * worldDelta[2]);
-    if (dist < 1e-6) { out[0] = 0; out[1] = 0; out[2] = 0; return; }
-    Q.applyToVec3Into(invQuat, worldDelta[0], worldDelta[1], worldDelta[2], _brainLocal);
+    const dist = Math.sqrt(
+      worldDelta[0] * worldDelta[0] + worldDelta[1] * worldDelta[1] +
+        worldDelta[2] * worldDelta[2],
+    );
+    if (dist < 1e-6) {
+      out[0] = 0;
+      out[1] = 0;
+      out[2] = 0;
+      return;
+    }
+    Q.applyToVec3Into(
+      invQuat,
+      worldDelta[0],
+      worldDelta[1],
+      worldDelta[2],
+      _brainLocal,
+    );
     const lx = _brainLocal[0], ly = _brainLocal[1], lz = _brainLocal[2];
     const horizDist = Math.sqrt(lx * lx + lz * lz);
-    const azimuth = Math.atan2(lx, lz);          // -π to π, 0 = forward
-    const elevation = Math.atan2(ly, horizDist);  // -π/2 to π/2
+    const azimuth = Math.atan2(lx, lz); // -π to π, 0 = forward
+    const elevation = Math.atan2(ly, horizDist); // -π/2 to π/2
     out[0] = azimuth / Math.PI;
     out[1] = elevation / (Math.PI / 2);
     out[2] = 1 / (1 + dist / 50);
@@ -532,18 +621,30 @@
 
     // Velocity direction in local frame (azimuth, elevation)
     if (speed > 1e-4) {
-      Q.applyToVec3Into(_brainInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _brainLocal);
+      Q.applyToVec3Into(
+        _brainInvQ,
+        ship.vel[0],
+        ship.vel[1],
+        ship.vel[2],
+        _brainLocal,
+      );
       const lx = _brainLocal[0], ly = _brainLocal[1], lz = _brainLocal[2];
       const horizDist = Math.sqrt(lx * lx + lz * lz);
-      inp[4] = Math.atan2(lx, lz) / Math.PI;             // vel azimuth
+      inp[4] = Math.atan2(lx, lz) / Math.PI; // vel azimuth
       inp[5] = Math.atan2(ly, horizDist) / (Math.PI / 2); // vel elevation
     }
 
     // ── Target (3) ──
     if (targetPos) {
-      const delta = [targetPos[0] - ship.pos[0], targetPos[1] - ship.pos[1], targetPos[2] - ship.pos[2]];
+      const delta = [
+        targetPos[0] - ship.pos[0],
+        targetPos[1] - ship.pos[1],
+        targetPos[2] - ship.pos[2],
+      ];
       _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
-      inp[6] = _brainLocal[0]; inp[7] = _brainLocal[1]; inp[8] = _brainLocal[2];
+      inp[6] = _brainLocal[0];
+      inp[7] = _brainLocal[1];
+      inp[8] = _brainLocal[2];
     }
 
     // ── Closest 3 enemies (9) ──
@@ -560,9 +661,15 @@
       for (let i = 0; i < n; i++) {
         const base = 9 + i * 3;
         const e = sorted[i].s;
-        const delta = [e.pos[0] - ship.pos[0], e.pos[1] - ship.pos[1], e.pos[2] - ship.pos[2]];
+        const delta = [
+          e.pos[0] - ship.pos[0],
+          e.pos[1] - ship.pos[1],
+          e.pos[2] - ship.pos[2],
+        ];
         _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
-        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+        inp[base] = _brainLocal[0];
+        inp[base + 1] = _brainLocal[1];
+        inp[base + 2] = _brainLocal[2];
       }
     }
 
@@ -579,9 +686,15 @@
       for (let i = 0; i < n; i++) {
         const base = 18 + i * 3;
         const f = sorted[i].s;
-        const delta = [f.pos[0] - ship.pos[0], f.pos[1] - ship.pos[1], f.pos[2] - ship.pos[2]];
+        const delta = [
+          f.pos[0] - ship.pos[0],
+          f.pos[1] - ship.pos[1],
+          f.pos[2] - ship.pos[2],
+        ];
         _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
-        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+        inp[base] = _brainLocal[0];
+        inp[base + 1] = _brainLocal[1];
+        inp[base + 2] = _brainLocal[2];
       }
     }
 
@@ -597,9 +710,15 @@
       for (let i = 0; i < n; i++) {
         const base = 27 + i * 4;
         const a = sorted[i].a;
-        const delta = [a.pos[0] - ship.pos[0], a.pos[1] - ship.pos[1], a.pos[2] - ship.pos[2]];
+        const delta = [
+          a.pos[0] - ship.pos[0],
+          a.pos[1] - ship.pos[1],
+          a.pos[2] - ship.pos[2],
+        ];
         _worldToLocalPolar(ship.quat, _brainInvQ, delta, _brainLocal);
-        inp[base] = _brainLocal[0]; inp[base + 1] = _brainLocal[1]; inp[base + 2] = _brainLocal[2];
+        inp[base] = _brainLocal[0];
+        inp[base + 1] = _brainLocal[1];
+        inp[base + 2] = _brainLocal[2];
         inp[base + 3] = 1 / (1 + (a.radius * 2) / 100); // diameter normalization
       }
     }
@@ -622,18 +741,18 @@
     const hasFuel = ship.fuel > 0;
 
     // ── Decode outputs ──
-    const azimuth = outputs[0] * Math.PI;               // -π to π in local frame
-    const elevation = outputs[1] * (Math.PI / 2);       // -π/2 to π/2 in local frame
-    const desiredSpeed = (outputs[2] + 1) / 2 * PHYSICS.MAX_SPEED;  // tanh → 0–1 → 0–MAX_SPEED
-    const fuelSpend = (outputs[3] + 1) / 2;             // tanh → 0–1
+    const azimuth = outputs[0] * Math.PI; // -π to π in local frame
+    const elevation = outputs[1] * (Math.PI / 2); // -π/2 to π/2 in local frame
+    const desiredSpeed = (outputs[2] + 1) / 2 * PHYSICS.MAX_SPEED; // tanh → 0–1 → 0–MAX_SPEED
+    const fuelSpend = (outputs[3] + 1) / 2; // tanh → 0–1
     const fireCmd = outputs[4];
 
     // ── 1. Compute desired direction in local frame from azimuth/elevation ──
     // Local frame: +Z = forward, +X = right, +Y = up
     const cosEl = Math.cos(elevation);
-    _brainTargetDir[0] = Math.sin(azimuth) * cosEl;   // local X
-    _brainTargetDir[1] = Math.sin(elevation);          // local Y
-    _brainTargetDir[2] = Math.cos(azimuth) * cosEl;   // local Z (forward)
+    _brainTargetDir[0] = Math.sin(azimuth) * cosEl; // local X
+    _brainTargetDir[1] = Math.sin(elevation); // local Y
+    _brainTargetDir[2] = Math.cos(azimuth) * cosEl; // local Z (forward)
 
     // ── 2. Turn toward desired direction ──
     // Current forward is [0,0,1] in local frame.
@@ -665,10 +784,16 @@
       ship.angVel[2] = axisWorld[2] * angSpeedTarget;
 
       // Torque fuel cost (proportional to how hard we're turning)
-      ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED));
+      ship.fuel = Math.max(
+        0,
+        ship.fuel -
+          PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED),
+      );
     } else if (sinAngle <= 1e-6) {
       // Already facing target direction — kill angular velocity
-      ship.angVel[0] = 0; ship.angVel[1] = 0; ship.angVel[2] = 0;
+      ship.angVel[0] = 0;
+      ship.angVel[1] = 0;
+      ship.angVel[2] = 0;
     }
 
     // ── 3. Thrust: match desired speed using fuel_spend as aggressiveness ──
@@ -677,7 +802,10 @@
 
     if (fuelSpend > 0.01 && hasFuel) {
       // thrust = speedError * fuelSpend, clamped to engine limits
-      const thrustMag = Math.max(-PHYSICS.THRUST, Math.min(PHYSICS.THRUST, speedError * fuelSpend));
+      const thrustMag = Math.max(
+        -PHYSICS.THRUST,
+        Math.min(PHYSICS.THRUST, speedError * fuelSpend),
+      );
 
       if (Math.abs(thrustMag) > 1e-6) {
         // Get forward direction in world frame
@@ -693,7 +821,11 @@
         }
 
         // Fuel cost proportional to actual burn
-        ship.fuel = Math.max(0, ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(thrustMag) / PHYSICS.THRUST);
+        ship.fuel = Math.max(
+          0,
+          ship.fuel -
+            PHYSICS.FUEL_COST_PER_FRAME * Math.abs(thrustMag) / PHYSICS.THRUST,
+        );
         ship.isAccelerating = thrustMag > 0;
         ship.isBraking = thrustMag < 0;
       } else {
@@ -708,7 +840,10 @@
 
     // ── 4. Forward cannon ──
     let firedAt = null;
-    if (fireCmd > 0 && ship.battery >= PHYSICS.WEAPON_COST && enemies && enemies.length > 0) {
+    if (
+      fireCmd > 0 && ship.battery >= PHYSICS.WEAPON_COST && enemies &&
+      enemies.length > 0
+    ) {
       Q.applyToVec3Into(ship.quat, 0, 0, 1, _brainFwd);
       let bestTarget = null;
       let bestDist = PHYSICS.WEAPON_RANGE;
@@ -721,7 +856,8 @@
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist > PHYSICS.WEAPON_RANGE || dist < 1e-6) continue;
         // Check cone: dot(forward, dirToEnemy) > cos(5°)
-        const dot = (_brainFwd[0] * dx + _brainFwd[1] * dy + _brainFwd[2] * dz) / dist;
+        const dot =
+          (_brainFwd[0] * dx + _brainFwd[1] * dy + _brainFwd[2] * dz) / dist;
         if (dot > PHYSICS.WEAPON_CONE_COS && dist < bestDist) {
           bestTarget = e;
           bestDist = dist;
@@ -730,14 +866,20 @@
       if (bestTarget) {
         ship.battery = Math.max(0, ship.battery - PHYSICS.WEAPON_COST);
         if (bestTarget.battery > 0) {
-          bestTarget.battery = Math.max(0, bestTarget.battery - PHYSICS.LASER_DAMAGE);
+          bestTarget.battery = Math.max(
+            0,
+            bestTarget.battery - PHYSICS.LASER_DAMAGE,
+          );
           bestTarget.shieldFlash = 15;
         } else {
           bestTarget.hp -= PHYSICS.LASER_DAMAGE;
-          ship.neuralHullDamageDealt = (ship.neuralHullDamageDealt || 0) + PHYSICS.LASER_DAMAGE;
+          ship.neuralHullDamageDealt = (ship.neuralHullDamageDealt || 0) +
+            PHYSICS.LASER_DAMAGE;
         }
-        ship.neuralDamageDealt = (ship.neuralDamageDealt || 0) + PHYSICS.LASER_DAMAGE;
-        bestTarget.neuralDamageTaken = (bestTarget.neuralDamageTaken || 0) + PHYSICS.LASER_DAMAGE;
+        ship.neuralDamageDealt = (ship.neuralDamageDealt || 0) +
+          PHYSICS.LASER_DAMAGE;
+        bestTarget.neuralDamageTaken = (bestTarget.neuralDamageTaken || 0) +
+          PHYSICS.LASER_DAMAGE;
         if (bestTarget.hp <= 0) bestTarget.alive = false;
         firedAt = bestTarget;
       }
@@ -779,14 +921,18 @@
       const dz = targetPos[2] - ship.pos[2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const deadDist = Math.max(0, dist - PHYSICS.TARGET_DEAD_ZONE); // 0 inside dead zone
-      if (dist > 1e-6) {
+      if (deadDist > 1e-6) {
+        // Outside dead zone: compute direction to target
         Q.applyToVec3Into(_simpleBrainInvQ, dx, dy, dz, _simpleBrainLocal);
-        const lx = _simpleBrainLocal[0], ly = _simpleBrainLocal[1], lz = _simpleBrainLocal[2];
+        const lx = _simpleBrainLocal[0],
+          ly = _simpleBrainLocal[1],
+          lz = _simpleBrainLocal[2];
         const horizDist = Math.sqrt(lx * lx + lz * lz);
-        inp[0] = Math.atan2(lx, lz) / Math.PI;             // target azimuth
+        inp[0] = Math.atan2(lx, lz) / Math.PI; // target azimuth
         inp[1] = Math.atan2(ly, horizDist) / (Math.PI / 2); // target elevation
       }
-      inp[2] = Math.min(deadDist / 100, 1);                 // target distance [0,1], 0 inside dead zone
+      // Inside dead zone: azimuth/elevation stay 0 — "you're here"
+      inp[2] = Math.min(deadDist / 100, 1); // target distance [0,1], 0 inside dead zone
     }
 
     // Speed
@@ -795,10 +941,18 @@
 
     // Velocity direction in local frame
     if (speed > 1e-4) {
-      Q.applyToVec3Into(_simpleBrainInvQ, ship.vel[0], ship.vel[1], ship.vel[2], _simpleBrainLocal);
-      const lx = _simpleBrainLocal[0], ly = _simpleBrainLocal[1], lz = _simpleBrainLocal[2];
+      Q.applyToVec3Into(
+        _simpleBrainInvQ,
+        ship.vel[0],
+        ship.vel[1],
+        ship.vel[2],
+        _simpleBrainLocal,
+      );
+      const lx = _simpleBrainLocal[0],
+        ly = _simpleBrainLocal[1],
+        lz = _simpleBrainLocal[2];
       const horizDist = Math.sqrt(lx * lx + lz * lz);
-      inp[4] = Math.atan2(lx, lz) / Math.PI;             // vel azimuth
+      inp[4] = Math.atan2(lx, lz) / Math.PI; // vel azimuth
       inp[5] = Math.atan2(ly, horizDist) / (Math.PI / 2); // vel elevation
     }
 
@@ -834,9 +988,15 @@
       ship.angVel[0] = axisWorld[0] * angSpeedTarget;
       ship.angVel[1] = axisWorld[1] * angSpeedTarget;
       ship.angVel[2] = axisWorld[2] * angSpeedTarget;
-      ship.fuel = Math.max(0, ship.fuel - PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED));
+      ship.fuel = Math.max(
+        0,
+        ship.fuel -
+          PHYSICS.TORQUE_FUEL_COST * (angSpeedTarget / PHYSICS.MAX_ANG_SPEED),
+      );
     } else if (sinAngle <= 1e-6) {
-      ship.angVel[0] = 0; ship.angVel[1] = 0; ship.angVel[2] = 0;
+      ship.angVel[0] = 0;
+      ship.angVel[1] = 0;
+      ship.angVel[2] = 0;
     }
 
     // 3. Thrust along forward axis
@@ -850,7 +1010,10 @@
       if (newSpeed > PHYSICS.MAX_SPEED) {
         V3.scaleMut(ship.vel, PHYSICS.MAX_SPEED / newSpeed);
       }
-      ship.fuel = Math.max(0, ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(throttle));
+      ship.fuel = Math.max(
+        0,
+        ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(throttle),
+      );
       ship.isAccelerating = throttle > 0;
       ship.isBraking = throttle < 0;
     } else {
@@ -895,11 +1058,17 @@
     // 2. Angular error: atan2 gives angle from forward (+Z) axis
     const distXZ = Math.sqrt(lx * lx + lz * lz);
     const dist = Math.sqrt(lx * lx + ly * ly + lz * lz);
-    const yawError = Math.atan2(lx, lz);       // +X => positive yaw
+    const yawError = Math.atan2(lx, lz); // +X => positive yaw
     const pitchError = Math.atan2(-ly, distXZ); // +Y target => negative pitch
 
     // 3. Angular velocity in local frame (derivative term)
-    Q.applyToVec3Into(_steerInvQ, ship.angVel[0], ship.angVel[1], ship.angVel[2], _steerLocalAngVel);
+    Q.applyToVec3Into(
+      _steerInvQ,
+      ship.angVel[0],
+      ship.angVel[1],
+      ship.angVel[2],
+      _steerLocalAngVel,
+    );
     const pitchRate = _steerLocalAngVel[0];
     const yawRate = _steerLocalAngVel[1];
 
@@ -907,7 +1076,7 @@
     const Kp = 4.0;
     const Kd = 8.0;
     let pitchCmd = Math.max(-1, Math.min(1, Kp * pitchError - Kd * pitchRate));
-    let yawCmd   = Math.max(-1, Math.min(1, Kp * yawError   - Kd * yawRate));
+    let yawCmd = Math.max(-1, Math.min(1, Kp * yawError - Kd * yawRate));
 
     // 5. Burn control — velocity-error approach
     //    Compute ideal velocity toward target, then correct the error.
@@ -917,7 +1086,8 @@
 
     // Ideal velocity: point toward target at safe approach speed
     // Safe speed ramps down as we get close: v = sqrt(2*a*d) * safety
-    const safeSpeed = dist < 0.5 ? 0
+    const safeSpeed = dist < 0.5
+      ? 0
       : Math.sqrt(2 * PHYSICS.THRUST * Math.max(0, dist - 0.5)) * 0.35;
     const cappedSafe = Math.min(safeSpeed, PHYSICS.MAX_SPEED * 0.8);
 
@@ -951,10 +1121,10 @@
       //   drift right (errLocalX > 0) → aim left (subtract from yaw)
       //   drift up    (errLocalY > 0) → aim down (add to pitch, since +pitch = nose down)
       const corrGain = 3.0;
-      const corrYaw   = yawError   - corrGain * errLocalX;
+      const corrYaw = yawError - corrGain * errLocalX;
       const corrPitch = pitchError + corrGain * errLocalY;
       pitchCmd = Math.max(-1, Math.min(1, Kp * corrPitch - Kd * pitchRate));
-      yawCmd   = Math.max(-1, Math.min(1, Kp * corrYaw   - Kd * yawRate));
+      yawCmd = Math.max(-1, Math.min(1, Kp * corrYaw - Kd * yawRate));
 
       // Burn based on forward component of velocity error
       // errLocalZ > 0 → going too fast forward → brake (negative burn)
@@ -970,8 +1140,8 @@
   // ══════════════════════════════════════════════════════════════
   // ██  Apply NN outputs to ship — returns { firedAt: ship|null }
   // ══════════════════════════════════════════════════════════════
-  const _enemyBuf = [];   // reused buffer for enemy list in applyNNOutputs
-  const _firedResult = { firedAt: null };  // reused return object
+  const _enemyBuf = []; // reused buffer for enemy list in applyNNOutputs
+  const _firedResult = { firedAt: null }; // reused return object
 
   function applyNNOutputs(ship, outputs, allShips) {
     const hasFuel = ship.fuel > 0;
@@ -981,14 +1151,17 @@
     // Computed in ship-local frame then applied as world-space angular velocity
     if (hasFuel) {
       const pitch = Math.abs(outputs[0]) > 0.1 ? outputs[0] : 0;
-      const yaw   = Math.abs(outputs[1]) > 0.1 ? outputs[1] : 0;
+      const yaw = Math.abs(outputs[1]) > 0.1 ? outputs[1] : 0;
       if (pitch !== 0 || yaw !== 0) {
-        Q.applyToVec3Into(ship.quat, 1, 0, 0, _rightTmp);  // local right
-        Q.applyToVec3Into(ship.quat, 0, 1, 0, _upTmp);     // local up
+        Q.applyToVec3Into(ship.quat, 1, 0, 0, _rightTmp); // local right
+        Q.applyToVec3Into(ship.quat, 0, 1, 0, _upTmp); // local up
         // pitch = rotate around right axis, yaw = rotate around up axis
-        ship.angVel[0] += (_rightTmp[0] * pitch + _upTmp[0] * yaw) * PHYSICS.TORQUE;
-        ship.angVel[1] += (_rightTmp[1] * pitch + _upTmp[1] * yaw) * PHYSICS.TORQUE;
-        ship.angVel[2] += (_rightTmp[2] * pitch + _upTmp[2] * yaw) * PHYSICS.TORQUE;
+        ship.angVel[0] += (_rightTmp[0] * pitch + _upTmp[0] * yaw) *
+          PHYSICS.TORQUE;
+        ship.angVel[1] += (_rightTmp[1] * pitch + _upTmp[1] * yaw) *
+          PHYSICS.TORQUE;
+        ship.angVel[2] += (_rightTmp[2] * pitch + _upTmp[2] * yaw) *
+          PHYSICS.TORQUE;
         const angSpeed = V3.length(ship.angVel);
         if (angSpeed > PHYSICS.MAX_ANG_SPEED) {
           V3.scaleMut(ship.angVel, PHYSICS.MAX_ANG_SPEED / angSpeed);
@@ -1008,7 +1181,10 @@
       if (speed > PHYSICS.MAX_SPEED) {
         V3.scaleMut(ship.vel, PHYSICS.MAX_SPEED / speed);
       }
-      ship.fuel = Math.max(0, ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(burn));
+      ship.fuel = Math.max(
+        0,
+        ship.fuel - PHYSICS.FUEL_COST_PER_FRAME * Math.abs(burn),
+      );
       ship.isAccelerating = burn > 0;
       ship.isBraking = burn < 0;
     } else {
@@ -1031,14 +1207,18 @@
       for (let j = i + 1; j < nEnemies; j++) {
         const di = V3.distanceTo(ship.pos, _enemyBuf[i].pos);
         const dj = V3.distanceTo(ship.pos, _enemyBuf[j].pos);
-        if (dj < di) { const tmp = _enemyBuf[i]; _enemyBuf[i] = _enemyBuf[j]; _enemyBuf[j] = tmp; }
+        if (dj < di) {
+          const tmp = _enemyBuf[i];
+          _enemyBuf[i] = _enemyBuf[j];
+          _enemyBuf[j] = tmp;
+        }
       }
     }
 
     if (nEnemies > 0) {
       const idx = Math.min(
         Math.floor((outputs[3] + 1) / 2 * nEnemies),
-        nEnemies - 1
+        nEnemies - 1,
       );
       const target = _enemyBuf[Math.max(0, idx)];
 
@@ -1080,7 +1260,10 @@
   // ══════════════════════════════════════════════════════════════
   // Ships must track: _framesInRange, _distanceClosed, _shotsFired (set by runMatch)
   function scoreMatch(allShips, matchFrames) {
-    const teams = { alpha: { ships: [], alive: [] }, omega: { ships: [], alive: [] } };
+    const teams = {
+      alpha: { ships: [], alive: [] },
+      omega: { ships: [], alive: [] },
+    };
     for (const s of allShips) {
       teams[s.team].ships.push(s);
       if (s.alive) teams[s.team].alive.push(s);
@@ -1127,7 +1310,9 @@
         let totalDist = 0;
         for (const s of myAlive) {
           let minDist = Infinity;
-          for (const e of enemyAlive) minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
+          for (const e of enemyAlive) {
+            minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
+          }
           totalDist += minDist;
         }
         score -= (totalDist / myAlive.length) * 5;
@@ -1140,8 +1325,8 @@
     }
 
     return {
-      alpha: scoreTeam('alpha', 'omega'),
-      omega: scoreTeam('omega', 'alpha'),
+      alpha: scoreTeam("alpha", "omega"),
+      omega: scoreTeam("omega", "alpha"),
     };
   }
 
@@ -1203,7 +1388,9 @@
         const fanIn = topology[li];
         const scale = 1 / Math.sqrt(fanIn);
         const nW = topology[li] * topology[li + 1];
-        for (let j = 0; j < nW; j++) genome[idx++] = (Math.random() * 2 - 1) * scale;
+        for (let j = 0; j < nW; j++) {
+          genome[idx++] = (Math.random() * 2 - 1) * scale;
+        }
         const nB = topology[li + 1];
         for (let j = 0; j < nB; j++) genome[idx++] = 0;
       }
@@ -1225,7 +1412,7 @@
     // Create ships
     const allShips = [];
     for (let teamIdx = 0; teamIdx < 2; teamIdx++) {
-      const team = teamIdx === 0 ? 'alpha' : 'omega';
+      const team = teamIdx === 0 ? "alpha" : "omega";
       const brain = teamIdx === 0 ? alphaBrain : omegaBrain;
       const zSign = teamIdx === 0 ? 1 : -1;
       for (let i = 0; i < fleetSize; i++) {
@@ -1252,7 +1439,7 @@
       let alphaAlive = false, omegaAlive = false;
       for (const s of allShips) {
         if (!s.alive) continue;
-        if (s.team === 'alpha') alphaAlive = true;
+        if (s.team === "alpha") alphaAlive = true;
         else omegaAlive = true;
         if (alphaAlive && omegaAlive) break;
       }
@@ -1292,8 +1479,11 @@
   // ██  Export
   // ══════════════════════════════════════════════════════════════
   const SimCore = {
-    V3, Q, PHYSICS,
-    NeuralNetwork, ReLUNetwork,
+    V3,
+    Q,
+    PHYSICS,
+    NeuralNetwork,
+    ReLUNetwork,
     createShipState,
     createAsteroid,
     createAsteroidWithMass,
@@ -1315,6 +1505,6 @@
     runMatch,
   };
 
-  if (typeof globalThis !== 'undefined') globalThis.SimCore = SimCore;
-  if (typeof module !== 'undefined' && module.exports) module.exports = SimCore;
+  if (typeof globalThis !== "undefined") globalThis.SimCore = SimCore;
+  if (typeof module !== "undefined" && module.exports) module.exports = SimCore;
 })();

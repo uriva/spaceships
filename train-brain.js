@@ -5,20 +5,27 @@
 // Inputs: target az/el/dist + speed + vel direction
 // Outputs: face az/el + throttle
 
-const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.url).pathname);
+const simCoreSrc = Deno.readTextFileSync(
+  new URL("./sim-core.js", import.meta.url).pathname,
+);
 (new Function(simCoreSrc))();
 const {
-  V3, Q, PHYSICS, ReLUNetwork,
-  createShipState, shipSimStep,
-  buildSimpleBrainInputs, applySimpleBrainOutputs,
+  V3,
+  Q,
+  PHYSICS,
+  ReLUNetwork,
+  createShipState,
+  shipSimStep,
+  buildSimpleBrainInputs,
+  applySimpleBrainOutputs,
 } = globalThis.SimCore;
 
 // ── Config ──
 const TOPOLOGY = [6, 3];
-const OUTPUT_FILE = Deno.args[0] || 'brain.json';
-const RUN_MINUTES = parseFloat(Deno.args[1] || '60');
-const FRESH = Deno.args.includes('--fresh');
-const SEED_FILE = FRESH ? '__noseed__' : (Deno.args[2] || 'brain.json');
+const OUTPUT_FILE = Deno.args[0] || "brain.json";
+const RUN_MINUTES = parseFloat(Deno.args[1] || "60");
+const FRESH = Deno.args.includes("--fresh");
+const SEED_FILE = FRESH ? "__noseed__" : (Deno.args[2] || "brain.json");
 const EVALS_PER_CANDIDATE = 8;
 const EPISODE_FRAMES = 3000; // 50 sec at 60fps
 
@@ -32,15 +39,20 @@ console.log(`Param count: ${N}`);
 
 // Recombination weights
 const rawWeights = [];
-for (let i = 0; i < MU; i++) rawWeights.push(Math.log(MU + 0.5) - Math.log(i + 1));
+for (let i = 0; i < MU; i++) {
+  rawWeights.push(Math.log(MU + 0.5) - Math.log(i + 1));
+}
 const wSum = rawWeights.reduce((a, b) => a + b, 0);
-const weights = rawWeights.map(w => w / wSum);
+const weights = rawWeights.map((w) => w / wSum);
 const mueff = 1.0 / weights.reduce((a, w) => a + w * w, 0);
 
 const cc = (4 + mueff / N) / (N + 4 + 2 * mueff / N);
 const cs = (mueff + 2) / (N + mueff + 5);
 const c1 = 2 / ((N + 1.3) ** 2 + mueff);
-const cmu = Math.min(1 - c1, 2 * (mueff - 2 + 1 / mueff) / ((N + 2) ** 2 + mueff));
+const cmu = Math.min(
+  1 - c1,
+  2 * (mueff - 2 + 1 / mueff) / ((N + 2) ** 2 + mueff),
+);
 const damps = 1 + 2 * Math.max(0, Math.sqrt((mueff - 1) / (N + 1)) - 1) + cs;
 const chiN = Math.sqrt(N) * (1 - 1 / (4 * N) + 1 / (21 * N * N));
 
@@ -56,7 +68,10 @@ function makeRng(seed) {
   return function () {
     const result = (((s1 * 5) << 7 | (s1 * 5) >>> 25) * 9) >>> 0;
     const t = (s1 << 9) >>> 0;
-    s2 ^= s0; s3 ^= s1; s1 ^= s2; s0 ^= s3;
+    s2 ^= s0;
+    s3 ^= s1;
+    s1 ^= s2;
+    s0 ^= s3;
     s2 ^= t;
     s3 = ((s3 << 11) | (s3 >>> 21)) >>> 0;
     return result / 4294967296;
@@ -76,13 +91,19 @@ diagC.fill(1.0);
 let seeded = false;
 try {
   const seedData = JSON.parse(Deno.readTextFileSync(SEED_FILE));
-  if (seedData.genome && seedData.genome.length === N &&
-      JSON.stringify(seedData.topology) === JSON.stringify(TOPOLOGY)) {
+  if (
+    seedData.genome && seedData.genome.length === N &&
+    JSON.stringify(seedData.topology) === JSON.stringify(TOPOLOGY)
+  ) {
     for (let i = 0; i < N; i++) mean[i] = seedData.genome[i];
     seeded = true;
     sigma = seedData.optimizer?.sigma || 0.3;
     sigma = Math.min(Math.max(sigma, 0.05), 0.3);
-    console.log(`Seeded from ${SEED_FILE} (fitness ${seedData.fitness?.toFixed(1)}, gen ${seedData.generation}, sigma=${sigma.toFixed(4)})`);
+    console.log(
+      `Seeded from ${SEED_FILE} (fitness ${
+        seedData.fitness?.toFixed(1)
+      }, gen ${seedData.generation}, sigma=${sigma.toFixed(4)})`,
+    );
   }
 } catch (_) { /* no seed */ }
 
@@ -107,14 +128,14 @@ if (!seeded) {
   mean.fill(0);
 
   // Face where target is
-  mean[0 * 6 + 0] = 1.0;  // target_az → face_az
-  mean[1 * 6 + 1] = 1.0;  // target_el → face_el
+  mean[0 * 6 + 0] = 1.0; // target_az → face_az
+  mean[1 * 6 + 1] = 1.0; // target_el → face_el
 
   // Throttle: thrust when far, brake when fast
-  mean[2 * 6 + 2] = 3.0;   // distance → throttle (far = more thrust)
-  mean[2 * 6 + 3] = -3.0;  // speed → throttle (fast = brake)
+  mean[2 * 6 + 2] = 3.0; // distance → throttle (far = more thrust)
+  mean[2 * 6 + 3] = -3.0; // speed → throttle (fast = brake)
 
-  console.log('No seed found, using warm-start initialization');
+  console.log("No seed found, using warm-start initialization");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -165,15 +186,25 @@ function generateEpisodeConfigs(masterSeed) {
   for (const { distRange: [lo, hi], speedMul } of scenarios) {
     const targetDist = lo + rng() * (hi - lo);
     const dir = rngDir(rng);
-    const targetPos = [dir[0] * targetDist, dir[1] * targetDist, dir[2] * targetDist];
+    const targetPos = [
+      dir[0] * targetDist,
+      dir[1] * targetDist,
+      dir[2] * targetDist,
+    ];
     // Random ship orientation
     const shipQuat = [rng() - 0.5, rng() - 0.5, rng() - 0.5, rng() - 0.5];
-    const ql = Math.sqrt(shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2);
+    const ql = Math.sqrt(
+      shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2,
+    );
     for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
     // Initial velocity (higher for near-target to test braking)
     const initSpeed = rng() * speedMul * PHYSICS.MAX_SPEED;
     const vDir = rngDir(rng);
-    const shipVel = [vDir[0] * initSpeed, vDir[1] * initSpeed, vDir[2] * initSpeed];
+    const shipVel = [
+      vDir[0] * initSpeed,
+      vDir[1] * initSpeed,
+      vDir[2] * initSpeed,
+    ];
     configs.push({ targetPos, shipQuat, shipVel, nearTarget: lo < 5 });
   }
   return configs;
@@ -183,11 +214,15 @@ function generateEpisodeConfigs(masterSeed) {
 // ██  Episode runner
 // ══════════════════════════════════════════════════════════════
 function runEpisode(brain, config) {
-  const ship = createShipState('alpha');
+  const ship = createShipState("alpha");
   ship.fuel = 2500;
-  ship.quat[0] = config.shipQuat[0]; ship.quat[1] = config.shipQuat[1];
-  ship.quat[2] = config.shipQuat[2]; ship.quat[3] = config.shipQuat[3];
-  ship.vel[0] = config.shipVel[0]; ship.vel[1] = config.shipVel[1]; ship.vel[2] = config.shipVel[2];
+  ship.quat[0] = config.shipQuat[0];
+  ship.quat[1] = config.shipQuat[1];
+  ship.quat[2] = config.shipQuat[2];
+  ship.quat[3] = config.shipQuat[3];
+  ship.vel[0] = config.shipVel[0];
+  ship.vel[1] = config.shipVel[1];
+  ship.vel[2] = config.shipVel[2];
 
   const targetPos = config.targetPos;
 
@@ -207,7 +242,8 @@ function runEpisode(brain, config) {
     // Stage 4 near-target: pure fuel + staying still
     // Max 100: fuel up to 70, stillness up to 30
     const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 70;
-    const stoppingBonus = Math.max(0, 1 - finalSpeed / (PHYSICS.MAX_SPEED * 0.1)) * 30;
+    const stoppingBonus =
+      Math.max(0, 1 - finalSpeed / (PHYSICS.MAX_SPEED * 0.1)) * 30;
     return fuelBonus + stoppingBonus;
   }
 
@@ -237,10 +273,12 @@ function evaluate(genome, episodeConfigs) {
 // ══════════════════════════════════════════════════════════════
 // ██  Training loop
 // ══════════════════════════════════════════════════════════════
-console.log('sep-CMA-ES Stage 2: Navigate + Stop + Fuel Efficiency');
-console.log(`Topology: ${TOPOLOGY.join('->')}, params: ${N}`);
+console.log("sep-CMA-ES Stage 2: Navigate + Stop + Fuel Efficiency");
+console.log(`Topology: ${TOPOLOGY.join("->")}, params: ${N}`);
 console.log(`Lambda: ${LAMBDA}, mu: ${MU}, mueff: ${mueff.toFixed(1)}`);
-console.log(`Episodes/candidate: ${EVALS_PER_CANDIDATE}, frames/episode: ${EPISODE_FRAMES}`);
+console.log(
+  `Episodes/candidate: ${EVALS_PER_CANDIDATE}, frames/episode: ${EPISODE_FRAMES}`,
+);
 console.log(`Fitness: proximity(100) + fuel(50) + stopping(30) = max 180`);
 console.log(`Running for ${RUN_MINUTES} minutes...\n`);
 
@@ -298,10 +336,14 @@ while (performance.now() - t0 < timeLimitMs) {
   let psNormSq = 0;
   for (let i = 0; i < N; i++) psNormSq += ps[i] * ps[i];
   const psNorm = Math.sqrt(psNormSq);
-  const hsig = psNorm / Math.sqrt(1 - (1 - cs) ** (2 * (gen + 1))) / chiN < 1.4 + 2 / (N + 1) ? 1 : 0;
+  const hsig = psNorm / Math.sqrt(1 - (1 - cs) ** (2 * (gen + 1))) / chiN <
+      1.4 + 2 / (N + 1)
+    ? 1
+    : 0;
 
   for (let i = 0; i < N; i++) {
-    pc[i] = (1 - cc) * pc[i] + hsig * Math.sqrt(cc * (2 - cc) * mueff) * meanDiff[i];
+    pc[i] = (1 - cc) * pc[i] +
+      hsig * Math.sqrt(cc * (2 - cc) * mueff) * meanDiff[i];
   }
 
   // ── Diagonal covariance update ──
@@ -328,23 +370,26 @@ while (performance.now() - t0 < timeLimitMs) {
   }
 
   if (sigma < 0.01 || stagnationCount >= 500) {
-    console.log(`\nConverged: sigma=${sigma.toFixed(6)}, stagnation=${stagnationCount}`);
+    console.log(
+      `\nConverged: sigma=${sigma.toFixed(6)}, stagnation=${stagnationCount}`,
+    );
     break;
   }
 
   // ── Logging ──
   const genMs = (performance.now() - genStart).toFixed(0);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(0);
-  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000).toFixed(0);
+  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000)
+    .toFixed(0);
 
   if (gen % 5 === 0 || gen <= 3) {
     console.log(
       `GEN ${String(gen).padStart(4)} | ` +
-      `top: ${topFitness.toFixed(1).padStart(8)} | ` +
-      `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
-      `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
-      `sigma: ${sigma.toFixed(4)} | ` +
-      `${genMs}ms | ${elapsed}s/${remain}s`
+        `top: ${topFitness.toFixed(1).padStart(8)} | ` +
+        `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
+        `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
+        `sigma: ${sigma.toFixed(4)} | ` +
+        `${genMs}ms | ${elapsed}s/${remain}s`,
     );
   }
 
@@ -354,17 +399,24 @@ while (performance.now() - t0 < timeLimitMs) {
 }
 
 function saveCheckpoint(genNum) {
-  Deno.writeTextFileSync(OUTPUT_FILE, JSON.stringify({
-    topology: TOPOLOGY,
-    activation: 'relu+tanh',
-    fitness: globalBestFitness,
-    genome: globalBestGenome,
-    generation: genNum,
-    scenario: 'stage4-stay-still',
-    optimizer: { name: 'sep-CMA-ES', lambda: LAMBDA, mu: MU, sigma, N },
-    config: { EPISODE_FRAMES, EVALS_PER_CANDIDATE },
-    trainedAt: new Date().toISOString(),
-  }, null, 2));
+  Deno.writeTextFileSync(
+    OUTPUT_FILE,
+    JSON.stringify(
+      {
+        topology: TOPOLOGY,
+        activation: "relu+tanh",
+        fitness: globalBestFitness,
+        genome: globalBestGenome,
+        generation: genNum,
+        scenario: "stage4-stay-still",
+        optimizer: { name: "sep-CMA-ES", lambda: LAMBDA, mu: MU, sigma, N },
+        config: { EPISODE_FRAMES, EVALS_PER_CANDIDATE },
+        trainedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 if (globalBestGenome) saveCheckpoint(gen);
