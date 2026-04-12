@@ -8161,21 +8161,24 @@
             engineParticles.push(particle);
           }
 
-          // Apply gravity from all asteroids (free — no fuel cost)
-          // Brain v2 was trained WITH gravity — apply to all ships including followCrosshair
-          const G_eff = G_GAME * gravityMultiplier;
+          // Apply gravity from all asteroids (free — no fuel cost).
+          // Follow-crosshair ships are trained without gravity, so skip it here to avoid
+          // endless micro-corrections after arriving at the target.
           _tmpGravAccel.set(0, 0, 0);
-          for (let ai = 0; ai < asteroids.length; ai++) {
-            const asteroid = asteroids[ai];
-            _tmpToBody.copy(asteroid.position).sub(ship.position);
-            const distSq = _tmpToBody.lengthSq();
-            const dist = Math.sqrt(distSq);
-            if (dist < 3) continue; // avoid singularity at overlap
-            const strength = G_eff * asteroid.userData.mass / distSq;
-            _tmpGravAccel.addScaledVector(_tmpToBody.normalize(), strength);
+          if (!data.followCrosshair) {
+            const G_eff = G_GAME * gravityMultiplier;
+            for (let ai = 0; ai < asteroids.length; ai++) {
+              const asteroid = asteroids[ai];
+              _tmpToBody.copy(asteroid.position).sub(ship.position);
+              const distSq = _tmpToBody.lengthSq();
+              const dist = Math.sqrt(distSq);
+              if (dist < 3) continue; // avoid singularity at overlap
+              const strength = G_eff * asteroid.userData.mass / distSq;
+              _tmpGravAccel.addScaledVector(_tmpToBody.normalize(), strength);
+            }
+            data.velocity.add(_tmpGravAccel);
           }
           data.gravityMag = _tmpGravAccel.length();
-          data.velocity.add(_tmpGravAccel);
 
           // Apply physics: accelerate along ship's forward axis only
           // Orientation is driven by angular momentum — torque steers, coasting preserves spin
