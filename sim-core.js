@@ -968,9 +968,10 @@
       const dz = targetPos[2] - ship.pos[2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const speed = V3.length(ship.vel);
-      const holdSpeed = PHYSICS.MAX_SPEED * 0.05;
+      const holdSpeed = PHYSICS.MAX_SPEED * 0.2;
 
-      // Inside the dead zone and nearly stopped: hard hold to prevent torque jitter.
+      // Inside the dead zone and moving slowly enough: hard hold to prevent
+      // visible micro-burns and hidden torque drain near the target.
       if (dist <= PHYSICS.TARGET_DEAD_ZONE && speed <= holdSpeed) {
         ship.vel[0] = 0;
         ship.vel[1] = 0;
