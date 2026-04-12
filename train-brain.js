@@ -229,7 +229,7 @@ function runEpisode(brain, config) {
   for (let frame = 0; frame < EPISODE_FRAMES; frame++) {
     const inputs = buildSimpleBrainInputs(ship, targetPos);
     const outputs = brain.forward(inputs);
-    applySimpleBrainOutputs(ship, outputs);
+    applySimpleBrainOutputs(ship, outputs, targetPos);
     shipSimStep(ship);
   }
 

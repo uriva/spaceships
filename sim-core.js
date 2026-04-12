@@ -959,8 +959,30 @@
     return inp;
   }
 
-  function applySimpleBrainOutputs(ship, outputs) {
+  function applySimpleBrainOutputs(ship, outputs, targetPos = null) {
     const hasFuel = ship.fuel > 0;
+
+    if (targetPos) {
+      const dx = targetPos[0] - ship.pos[0];
+      const dy = targetPos[1] - ship.pos[1];
+      const dz = targetPos[2] - ship.pos[2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const speed = V3.length(ship.vel);
+      const holdSpeed = PHYSICS.MAX_SPEED * 0.05;
+
+      // Inside the dead zone and nearly stopped: hard hold to prevent torque jitter.
+      if (dist <= PHYSICS.TARGET_DEAD_ZONE && speed <= holdSpeed) {
+        ship.vel[0] = 0;
+        ship.vel[1] = 0;
+        ship.vel[2] = 0;
+        ship.angVel[0] = 0;
+        ship.angVel[1] = 0;
+        ship.angVel[2] = 0;
+        ship.isAccelerating = false;
+        ship.isBraking = false;
+        return;
+      }
+    }
 
     // Decode outputs
     const azimuth = outputs[0] * Math.PI;

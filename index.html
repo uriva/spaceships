@@ -10750,7 +10750,7 @@
             const targetPos = [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z];
             const inputs = SimCore.buildSimpleBrainInputs(sim, targetPos);
             const outputs = brain.forward(inputs);
-            SimCore.applySimpleBrainOutputs(sim, outputs);
+            SimCore.applySimpleBrainOutputs(sim, outputs, targetPos);
           } else {
             const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
             const outputs = ship.userData.neuralBrain.forward(inputs);
