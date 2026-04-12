@@ -8660,11 +8660,13 @@
           data.isBraking = false;
           data.targetVelocity.set(0, 0, 0);
 
-          // Hover animation (only when stopped) - offset from base Y, don't overwrite
+          // Hover animation (only when stopped) - visual only for regular ships.
+          // Follow/neural ships use the sim as authority, so bobbing them here
+          // creates fake drift that the controller then tries to correct.
           if (!data.baseY && data.baseY !== 0) {
             data.baseY = ship.position.y; // Store initial Y on first frame
           }
-          if (speed < 0.01) {
+          if (speed < 0.01 && !data.followCrosshair && !data.neuralBrain) {
             ship.position.y = data.baseY +
               Math.sin(Date.now() * 0.002 + index) * 0.2;
           }
