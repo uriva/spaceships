@@ -247,7 +247,7 @@ function runEpisode(brain, config) {
     return fuelBonus + stoppingBonus;
   }
 
-  // Stage 3 fitness for navigation episodes: arrive within dead zone AND stop efficiently
+  // Navigation episodes: arrive within dead zone AND stop efficiently
   const proximityBonus = 100 / (1 + finalDist);
   const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 50;
   const stoppingBonus = rawDist < 10
@@ -273,13 +273,15 @@ function evaluate(genome, episodeConfigs) {
 // ══════════════════════════════════════════════════════════════
 // ██  Training loop
 // ══════════════════════════════════════════════════════════════
-console.log("sep-CMA-ES Stage 2: Navigate + Stop + Fuel Efficiency");
+console.log("sep-CMA-ES Stage 4: Stay Still + Navigate");
 console.log(`Topology: ${TOPOLOGY.join("->")}, params: ${N}`);
 console.log(`Lambda: ${LAMBDA}, mu: ${MU}, mueff: ${mueff.toFixed(1)}`);
 console.log(
   `Episodes/candidate: ${EVALS_PER_CANDIDATE}, frames/episode: ${EPISODE_FRAMES}`,
 );
-console.log(`Fitness: proximity(100) + fuel(50) + stopping(30) = max 180`);
+console.log(
+  "Fitness: near-target fuel(70)+stillness(30), navigation proximity(100)+fuel(50)+stopping(30)",
+);
 console.log(`Running for ${RUN_MINUTES} minutes...\n`);
 
 const t0 = performance.now();

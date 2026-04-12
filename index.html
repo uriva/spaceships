@@ -5685,7 +5685,7 @@
             const ship = createSingleSpaceship(config, spaceships.length);
             ship.position.set(x, y, z);
 
-            // SimCore state (needed for steerToward)
+            // SimCore state for the follow-crosshair movement brain
             const sim = SimCore.createShipState("alpha");
             sim.maxHp = ship.userData.maxHp;
             sim.hp = ship.userData.hp;
@@ -5694,7 +5694,7 @@
             sim.maxFuel = ship.userData.maxFuel;
             sim.fuel = ship.userData.fuel;
             ship.userData.sim = sim;
-            // Mark as PD-steered (no neuralBrain — steerToward handles everything)
+            // Mark as follow-crosshair controlled (driven by the simplified movement brain)
             ship.userData.followCrosshair = true;
             ship.userData.neuralDamageDealt = 0;
             ship.userData.neuralDamageTaken = 0;
