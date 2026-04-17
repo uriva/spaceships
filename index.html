@@ -2516,31 +2516,31 @@
       // Linear + tanh output. 6 inputs → 3 outputs. 21 params.
       // Inputs: target az/el/dist + speed + vel direction (all local frame)
       // Outputs: face az/el + throttle
-      // Trained: fitness=136.1, gen=567, sep-CMA-ES, stage4 (stay-still + dead-zone az/el fix)
+      // Trained: fitness=159.5, gen=843, sep-CMA-ES, staged curriculum (stop)
       const FOLLOW_TOPOLOGY = [6, 3];
       const ReLUNetwork = SimCore.ReLUNetwork;
       const FOLLOW_GENOME = new Float64Array([
-        7.49831776,
-        2.27929645,
-        -0.42270745,
-        0.31627698,
-        -1.65309979,
-        -2.22804009,
-        -1.33664577,
-        6.19264940,
-        -0.36492770,
-        -1.36639059,
-        0.39684253,
-        -1.18526681,
-        0.35428345,
-        1.42022874,
-        6.38982527,
-        -3.29837256,
-        -1.26128284,
-        0.04165564,
-        0.19931162,
-        0.35047464,
-        -0.62138344,
+        5.83255851,
+        0.91297010,
+        -0.92757870,
+        -0.13563980,
+        -1.77312616,
+        -0.08015981,
+        -0.15257738,
+        5.82920580,
+        0.04144838,
+        -0.08191129,
+        -0.10396804,
+        -1.35527728,
+        -1.05558079,
+        -0.13274226,
+        10.81374936,
+        -4.46447978,
+        -3.80969654,
+        -0.21133158,
+        1.05736114,
+        -0.22169977,
+        -2.58322639,
       ]);
 
       // Singleton follow brain — created once, reused
@@ -5696,6 +5696,11 @@
             ship.userData.sim = sim;
             // Mark as follow-crosshair controlled (driven by the simplified movement brain)
             ship.userData.followCrosshair = true;
+            ship.userData.navOrder = {
+              type: "follow",
+              target: { kind: "crosshair" },
+              distance: 0,
+            };
             ship.userData.neuralDamageDealt = 0;
             ship.userData.neuralDamageTaken = 0;
             ship.userData.neuralHullDamageDealt = 0;
@@ -7709,6 +7714,11 @@
           type: "move",
           target: position.clone(),
         };
+        ship.userData.navOrder = {
+          type: "move",
+          target: { kind: "point", pos: [position.x, position.y, position.z] },
+          distance: 0,
+        };
         showTargetMarker(position, "move");
       }
 
@@ -8162,10 +8172,10 @@
           }
 
           // Apply gravity from all asteroids (free — no fuel cost).
-          // Follow-crosshair ships are trained without gravity, so skip it here to avoid
-          // endless micro-corrections after arriving at the target.
+          // Navigation-brain ships are currently trained without gravity, so skip it
+          // here to avoid endless micro-corrections after arriving at the target.
           _tmpGravAccel.set(0, 0, 0);
-          if (!data.followCrosshair) {
+          if (!data.navOrder && !data.followCrosshair) {
             const G_eff = G_GAME * gravityMultiplier;
             for (let ai = 0; ai < asteroids.length; ai++) {
               const asteroid = asteroids[ai];
@@ -8187,7 +8197,7 @@
 
           // Neural ships: NN controls thrust/torque directly via NEURO.applyOutputs()
           // Skip the behavior-driven thrust/brake/RCS sections
-          if (!data.neuralBrain && !data.followCrosshair) {
+          if (!data.neuralBrain && !data.navOrder && !data.followCrosshair) {
             if (data.isAccelerating && hasFuel) {
               _tmpVelDiff.copy(data.targetVelocity).sub(data.velocity);
               if (_tmpVelDiff.length() > THRUST * 0.5) {
@@ -8246,11 +8256,11 @@
                 applyingTorque = true; // costs fuel
               }
             }
-          } // end if (!data.neuralBrain && !data.followCrosshair)
+          } // end if (!data.neuralBrain && !data.navOrder && !data.followCrosshair)
 
-          // Angular damping for neural/follow ships — matches shipSimStep's 0.97/frame
+          // Angular damping for neural/nav-brain ships — matches shipSimStep's 0.97/frame
           // Training uses shipSimStep which applies this; browser must match.
-          if (data.neuralBrain || data.followCrosshair) {
+          if (data.neuralBrain || data.navOrder || data.followCrosshair) {
             data.angularVelocity.multiplyScalar(0.97);
           }
 
@@ -8666,7 +8676,10 @@
           if (!data.baseY && data.baseY !== 0) {
             data.baseY = ship.position.y; // Store initial Y on first frame
           }
-          if (speed < 0.01 && !data.followCrosshair && !data.neuralBrain) {
+          if (
+            speed < 0.01 && !data.navOrder && !data.followCrosshair &&
+            !data.neuralBrain
+          ) {
             ship.position.y = data.baseY +
               Math.sin(Date.now() * 0.002 + index) * 0.2;
           }
@@ -10571,6 +10584,14 @@
                 type: "move",
                 target: parsed.target.clone(),
               };
+              data.navOrder = {
+                type: "move",
+                target: {
+                  kind: "point",
+                  pos: [parsed.target.x, parsed.target.y, parsed.target.z],
+                },
+                distance: 0,
+              };
               break;
             case "STOP":
               data.behavior = {
@@ -10628,6 +10649,15 @@
                 followCrosshair: parsed.followCrosshair || false,
                 distance: parsed.distance,
               };
+              data.navOrder = {
+                type: "follow",
+                target: parsed.targetShip
+                  ? { kind: "ship", ship: parsed.targetShip }
+                  : parsed.followCamera
+                  ? { kind: "camera" }
+                  : { kind: "crosshair" },
+                distance: parsed.distance,
+              };
               break;
             case "ATTACK":
               data.behavior = {
@@ -10650,6 +10680,74 @@
       // The physics engine in updateSpaceships() handles actual acceleration,
       // fuel consumption, and engine particle effects.
 
+      // Fleet computer → ship contract:
+      //   navOrder = { type, target, distance }
+      //   targetState = { mode, pos:[x,y,z], vel:[x,y,z] }
+      // The movement brain only consumes targetState; the fleet computer is free
+      // to choose crosshair, ship, point, camera, or future tactical targets.
+      function getShipNavTargetState(ship) {
+        const d = ship.userData;
+        const order = d.navOrder;
+        const zeroVel = [0, 0, 0];
+
+        if (order?.target?.kind === "point" && order.target.pos) {
+          return { mode: order.type, pos: order.target.pos, vel: zeroVel };
+        }
+        if (order?.target?.kind === "crosshair") {
+          return {
+            mode: order.type,
+            pos: [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z],
+            vel: zeroVel,
+          };
+        }
+        if (order?.target?.kind === "camera") {
+          return {
+            mode: order.type,
+            pos: [cameraPosition.x, cameraPosition.y, cameraPosition.z],
+            vel: zeroVel,
+          };
+        }
+        if (order?.target?.kind === "ship" && order.target.ship?.parent) {
+          const targetShip = order.target.ship;
+          const tv = targetShip.userData.velocity;
+          return {
+            mode: order.type,
+            pos: [
+              targetShip.position.x,
+              targetShip.position.y,
+              targetShip.position.z,
+            ],
+            vel: tv ? [tv.x, tv.y, tv.z] : zeroVel,
+          };
+        }
+
+        if (d.followCrosshair) {
+          return {
+            mode: "follow",
+            pos: [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z],
+            vel: zeroVel,
+          };
+        }
+
+        return null;
+      }
+
+      function usesNavBrain(ship) {
+        const d = ship.userData;
+        return !!(d.followCrosshair || d.navOrder);
+      }
+
+      function getShipNavTargetPosition(ship) {
+        const targetState = getShipNavTargetState(ship);
+        return targetState
+          ? new THREE.Vector3(
+            targetState.pos[0],
+            targetState.pos[1],
+            targetState.pos[2],
+          )
+          : null;
+      }
+
       // ── Formation offset helper ──
       // When multiple ships converge on the same target, spread them out
       // in a disc perpendicular to the approach direction.
@@ -10662,15 +10760,7 @@
         let myIndex = 0;
         for (const other of spaceships) {
           if (other === ship) continue;
-          const ob = other.userData.behavior;
-          if (!ob) continue;
-          let otherTarget = null;
-          if (ob.type === "move") otherTarget = ob.target;
-          else if (ob.type === "follow") {
-            if (ob.followCrosshair) otherTarget = cursorPos3D;
-            else if (ob.followCamera) otherTarget = cameraPosition;
-            else if (ob.targetShip) otherTarget = ob.targetShip.position;
-          }
+          const otherTarget = getShipNavTargetPosition(other);
           if (
             otherTarget &&
             otherTarget.distanceTo(targetPos) < TARGET_MATCH_THRESHOLD
@@ -10719,7 +10809,7 @@
         for (let i = 0; i < spaceships.length; i++) {
           const s = spaceships[i];
           if (
-            (s.userData.neuralBrain || s.userData.followCrosshair) && s.parent
+            (s.userData.neuralBrain || usesNavBrain(s)) && s.parent
           ) {
             if (nNeural < _neuralBuf.length) _neuralBuf[nNeural] = s;
             else _neuralBuf.push(s);
@@ -10748,14 +10838,15 @@
           const ship = _neuralBuf[ni];
           const sim = ship.userData.sim;
 
-          if (ship.userData.followCrosshair) {
+          if (usesNavBrain(ship) && !ship.userData.neuralBrain) {
             // Simplified movement brain — 6 inputs, 3 outputs (no weapons)
             const brain = getFollowBrain();
             if (!brain) continue;
-            const targetPos = [cursorPos3D.x, cursorPos3D.y, cursorPos3D.z];
-            const inputs = SimCore.buildSimpleBrainInputs(sim, targetPos);
+            const targetState = getShipNavTargetState(ship);
+            if (!targetState) continue;
+            const inputs = SimCore.buildSimpleBrainInputs(sim, targetState);
             const outputs = brain.forward(inputs);
-            SimCore.applySimpleBrainOutputs(sim, outputs, targetPos);
+            SimCore.applySimpleBrainOutputs(sim, outputs, targetState);
           } else {
             const inputs = SimCore.buildNNInputs(sim, _allSimBuf, simAsteroids);
             const outputs = ship.userData.neuralBrain.forward(inputs);
@@ -10835,7 +10926,7 @@
               if (spaceships.length > 0) selectShip(0);
             }
           } else if (
-            ship.userData.neuralBrain || ship.userData.followCrosshair
+            ship.userData.neuralBrain || usesNavBrain(ship)
           ) {
             NEURO.syncFromSim(ship);
           } else {

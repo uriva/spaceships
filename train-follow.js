@@ -3,23 +3,31 @@
 // Uses [3, 4, 3] topology (only 31 params) for fast evolution,
 // then embeds result into full [80,16,16,5] for the game.
 
-const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.url).pathname);
+const simCoreSrc = Deno.readTextFileSync(
+  new URL("./sim-core.js", import.meta.url).pathname,
+);
 (new Function(simCoreSrc))();
 const {
-  V3, Q, PHYSICS, NeuralNetwork,
-  createShipState, shipSimStep, applyNNOutputs,
-  initPopulation, evolve,
+  V3,
+  Q,
+  PHYSICS,
+  NeuralNetwork,
+  createShipState,
+  shipSimStep,
+  applyNNOutputs,
+  initPopulation,
+  evolve,
 } = globalThis.SimCore;
 
 // ── Config ──
-const TINY_TOPOLOGY = [3, 4, 3];   // localPos → pitch/yaw/burn
+const TINY_TOPOLOGY = [3, 4, 3]; // localPos → pitch/yaw/burn
 const POP_SIZE = 300;
 const MUTATION_RATE = 0.20;
 const MUTATION_STRENGTH = 0.5;
-const OUTPUT_FILE = Deno.args[0] || 'best-genome.json';
+const OUTPUT_FILE = Deno.args[0] || "best-genome.json";
 const ARENA_RADIUS = 50;
-const MATCH_FRAMES = 600;           // 10 seconds
-const EVALS_PER_GENOME = 5;         // more evals = less noise
+const MATCH_FRAMES = 600; // 10 seconds
+const EVALS_PER_GENOME = 5; // more evals = less noise
 const RUN_MINUTES = 30;
 const CLOSE_THRESHOLD = 10;
 
@@ -52,14 +60,18 @@ function applyTinyOutputs(ship, tinyOutputs) {
 
 // ══════════════════════════════════════════════════════════════
 function runEpisode(brain) {
-  const ship = createShipState('alpha');
+  const ship = createShipState("alpha");
   Q.setRandomMut(ship.quat);
 
   // Stationary mark at random position, distance 15-40
-  const dir = V3.normalize([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
+  const dir = V3.normalize([
+    Math.random() - 0.5,
+    Math.random() - 0.5,
+    Math.random() - 0.5,
+  ]);
   const dist0 = 15 + Math.random() * 25;
   const markPos = [dir[0] * dist0, dir[1] * dist0, dir[2] * dist0];
-  const mark = { pos: markPos };  // minimal mark object
+  const mark = { pos: markPos }; // minimal mark object
 
   let proximityScore = 0;
 
@@ -139,7 +151,7 @@ function embedIntoFull(tinyGenome) {
   for (let i = 0; i < 4; i++) {
     fullGenome[L1_OFF + i * 16 + i] = 5.0; // strong pass-through (tanh(5*tanh(x)) ≈ sign(x))
   }
-  // Actually we need linear pass-through. tanh(5*x) saturates. 
+  // Actually we need linear pass-through. tanh(5*x) saturates.
   // Use weight=1.0 for approximate identity through tanh.
   // tanh(1.0 * tanh(x)) ≈ tanh(x) * 0.76... not great.
   // Better: use weight=2.0 so tanh(2*tanh(x)) recovers more signal.
@@ -173,9 +185,13 @@ let population = initPopulation(POP_SIZE, TINY_TOPOLOGY);
 let globalBestFitness = -Infinity;
 let globalBestGenome = null;
 
-console.log('Follow-mark trainer (tiny network)');
+console.log("Follow-mark trainer (tiny network)");
 console.log(`Pop: ${POP_SIZE}, evals/genome: ${EVALS_PER_GENOME}`);
-console.log(`Topology: ${TINY_TOPOLOGY.join('→')}, params: ${new NeuralNetwork(TINY_TOPOLOGY).paramCount}`);
+console.log(
+  `Topology: ${TINY_TOPOLOGY.join("→")}, params: ${
+    new NeuralNetwork(TINY_TOPOLOGY).paramCount
+  }`,
+);
 console.log(`Running for ${RUN_MINUTES} minutes...`);
 
 const t0 = performance.now();
@@ -207,15 +223,16 @@ while (performance.now() - t0 < timeLimitMs) {
 
   const genMs = (performance.now() - genStart).toFixed(0);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(0);
-  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000).toFixed(0);
+  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000)
+    .toFixed(0);
 
   if (gen % 10 === 0 || gen <= 5) {
     console.log(
       `GEN ${String(gen).padStart(4)} | ` +
-      `top: ${topFitness.toFixed(1).padStart(8)} | ` +
-      `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
-      `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
-      `${genMs}ms | ${elapsed}s/${remain}s left`
+        `top: ${topFitness.toFixed(1).padStart(8)} | ` +
+        `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
+        `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
+        `${genMs}ms | ${elapsed}s/${remain}s left`,
     );
   }
 
@@ -228,8 +245,15 @@ while (performance.now() - t0 < timeLimitMs) {
       genome: fullGenome,
       tinyGenome: globalBestGenome,
       generation: gen,
-      scenario: 'follow-mark',
-      config: { POP_SIZE, EVALS_PER_GENOME, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
+      scenario: "follow-mark",
+      config: {
+        POP_SIZE,
+        EVALS_PER_GENOME,
+        MUTATION_RATE,
+        MUTATION_STRENGTH,
+        ARENA_RADIUS,
+        MATCH_FRAMES,
+      },
       trainedAt: new Date().toISOString(),
     };
     Deno.writeTextFileSync(OUTPUT_FILE, JSON.stringify(checkpoint, null, 2));
@@ -246,8 +270,15 @@ if (globalBestGenome) {
     genome: fullGenome,
     tinyGenome: globalBestGenome,
     generation: gen,
-    scenario: 'follow-mark',
-    config: { POP_SIZE, EVALS_PER_GENOME, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
+    scenario: "follow-mark",
+    config: {
+      POP_SIZE,
+      EVALS_PER_GENOME,
+      MUTATION_RATE,
+      MUTATION_STRENGTH,
+      ARENA_RADIUS,
+      MATCH_FRAMES,
+    },
     trainedAt: new Date().toISOString(),
   };
   Deno.writeTextFileSync(OUTPUT_FILE, JSON.stringify(final, null, 2));

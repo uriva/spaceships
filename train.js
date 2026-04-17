@@ -5,13 +5,22 @@
 // Seeds from best-genome.json if available
 // Run: deno run --allow-read --allow-write train.js [output.json]
 
-const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.url).pathname);
+const simCoreSrc = Deno.readTextFileSync(
+  new URL("./sim-core.js", import.meta.url).pathname,
+);
 (new Function(simCoreSrc))();
 const {
-  V3, Q, PHYSICS, NeuralNetwork,
-  createShipState, checkAsteroidCollisions,
-  shipSimStep, buildNNInputs, applyNNOutputs,
-  initPopulation, evolve,
+  V3,
+  Q,
+  PHYSICS,
+  NeuralNetwork,
+  createShipState,
+  checkAsteroidCollisions,
+  shipSimStep,
+  buildNNInputs,
+  applyNNOutputs,
+  initPopulation,
+  evolve,
 } = globalThis.SimCore;
 
 // ── Config ──
@@ -20,9 +29,9 @@ const POP_SIZE = 80;
 const OPPONENTS_PER_EVAL = 3;
 const MUTATION_RATE = 0.12;
 const MUTATION_STRENGTH = 0.30;
-const OUTPUT_FILE = Deno.args[0] || 'best-genome.json';
+const OUTPUT_FILE = Deno.args[0] || "best-genome.json";
 const ARENA_RADIUS = 100;
-const MATCH_FRAMES = 1500;        // ~25 seconds at 60fps
+const MATCH_FRAMES = 1500; // ~25 seconds at 60fps
 const FLEET_SIZE = 3;
 const SEPARATION = 50;
 const SPREAD = 15;
@@ -31,10 +40,16 @@ const RUN_MINUTES = 30;
 // ── Seed from existing genome ──
 function trySeedGenome() {
   try {
-    const raw = Deno.readTextFileSync(new URL('./best-genome.json', import.meta.url).pathname);
+    const raw = Deno.readTextFileSync(
+      new URL("./best-genome.json", import.meta.url).pathname,
+    );
     const data = JSON.parse(raw);
     if (data.genome && data.genome.length > 0) {
-      console.log(`Seeding from best-genome.json (fitness: ${data.fitness?.toFixed(1) ?? '?'})`);
+      console.log(
+        `Seeding from best-genome.json (fitness: ${
+          data.fitness?.toFixed(1) ?? "?"
+        })`,
+      );
       return new Float64Array(data.genome);
     }
   } catch { /* no file or bad parse */ }
@@ -45,7 +60,10 @@ function trySeedGenome() {
 // ██  Scoring: kill-first + focus fire + team coordination
 // ══════════════════════════════════════════════════════════════
 function scoreTeamResult(allShips, matchFrames) {
-  const teams = { alpha: { ships: [], alive: [] }, omega: { ships: [], alive: [] } };
+  const teams = {
+    alpha: { ships: [], alive: [] },
+    omega: { ships: [], alive: [] },
+  };
   for (const s of allShips) {
     teams[s.team].ships.push(s);
     if (s.alive) teams[s.team].alive.push(s);
@@ -104,8 +122,8 @@ function scoreTeamResult(allShips, matchFrames) {
 
     // ── Team outcome: win/loss bonus ──
     const myKilled = myShips.length - myAlive.length;
-    if (enemiesKilled > myKilled) score += 1000;       // winning team
-    else if (enemiesKilled < myKilled) score -= 500;    // losing team
+    if (enemiesKilled > myKilled) score += 1000; // winning team
+    else if (enemiesKilled < myKilled) score -= 500; // losing team
 
     // ── Full wipe bonus: annihilated the enemy fleet ──
     if (enemyAlive.length === 0) score += 2000;
@@ -115,7 +133,9 @@ function scoreTeamResult(allShips, matchFrames) {
       let totalDist = 0;
       for (const s of myAlive) {
         let minDist = Infinity;
-        for (const e of enemyAlive) minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
+        for (const e of enemyAlive) {
+          minDist = Math.min(minDist, V3.distanceTo(s.pos, e.pos));
+        }
         totalDist += minDist;
       }
       score -= (totalDist / myAlive.length) * 15;
@@ -125,8 +145,8 @@ function scoreTeamResult(allShips, matchFrames) {
   }
 
   return {
-    alpha: scoreTeam('alpha', 'omega'),
-    omega: scoreTeam('omega', 'alpha'),
+    alpha: scoreTeam("alpha", "omega"),
+    omega: scoreTeam("omega", "alpha"),
   };
 }
 
@@ -136,7 +156,7 @@ function scoreTeamResult(allShips, matchFrames) {
 function runMatchWithTracking(alphaBrain, omegaBrain) {
   const allShips = [];
   for (let teamIdx = 0; teamIdx < 2; teamIdx++) {
-    const team = teamIdx === 0 ? 'alpha' : 'omega';
+    const team = teamIdx === 0 ? "alpha" : "omega";
     const brain = teamIdx === 0 ? alphaBrain : omegaBrain;
     const zSign = teamIdx === 0 ? 1 : -1;
     for (let i = 0; i < FLEET_SIZE; i++) {
@@ -164,7 +184,7 @@ function runMatchWithTracking(alphaBrain, omegaBrain) {
     let alphaAlive = false, omegaAlive = false;
     for (const s of allShips) {
       if (!s.alive) continue;
-      if (s.team === 'alpha') alphaAlive = true;
+      if (s.team === "alpha") alphaAlive = true;
       else omegaAlive = true;
       if (alphaAlive && omegaAlive) break;
     }
@@ -184,7 +204,10 @@ function runMatchWithTracking(alphaBrain, omegaBrain) {
         let lowestHp = Infinity, lowestEnemy = null;
         for (const e of allShips) {
           if (e === s || !e.alive || e.team === s.team) continue;
-          if (e.hp < lowestHp) { lowestHp = e.hp; lowestEnemy = e; }
+          if (e.hp < lowestHp) {
+            lowestHp = e.hp;
+            lowestEnemy = e;
+          }
         }
         if (result.firedAt === lowestEnemy) {
           s._focusDamage += PHYSICS.LASER_DAMAGE;
@@ -200,7 +223,7 @@ function runMatchWithTracking(alphaBrain, omegaBrain) {
       if (s._prevMinDist < Infinity && minDistToEnemy < Infinity) {
         const delta = s._prevMinDist - minDistToEnemy;
         if (delta > 0) s._distanceClosed += delta;
-        else s._distanceOpened += (-delta);
+        else s._distanceOpened += -delta;
       }
       s._prevMinDist = minDistToEnemy;
 
@@ -254,15 +277,21 @@ if (seedGenome && seedGenome.length === population[0].genome.length) {
       }
     }
   }
-  console.log('Seeded 10 individuals from best-genome.json');
+  console.log("Seeded 10 individuals from best-genome.json");
 }
 
 let globalBestFitness = -Infinity;
 let globalBestGenome = null;
 
 console.log(`3v3 fleet trainer: focus fire + coordination`);
-console.log(`Pop: ${POP_SIZE}, opponents/eval: ${OPPONENTS_PER_EVAL}, arena: ${ARENA_RADIUS}u radius`);
-console.log(`Topology: ${TOPOLOGY.join('→')}, params: ${new NeuralNetwork(TOPOLOGY).paramCount}`);
+console.log(
+  `Pop: ${POP_SIZE}, opponents/eval: ${OPPONENTS_PER_EVAL}, arena: ${ARENA_RADIUS}u radius`,
+);
+console.log(
+  `Topology: ${TOPOLOGY.join("→")}, params: ${
+    new NeuralNetwork(TOPOLOGY).paramCount
+  }`,
+);
 console.log(`Running for ${RUN_MINUTES} minutes...`);
 
 const t0 = performance.now();
@@ -294,15 +323,16 @@ while (performance.now() - t0 < timeLimitMs) {
 
   const genMs = (performance.now() - genStart).toFixed(0);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(0);
-  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000).toFixed(0);
+  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000)
+    .toFixed(0);
 
   if (gen % 5 === 0 || gen <= 3) {
     console.log(
       `GEN ${String(gen).padStart(4)} | ` +
-      `top: ${topFitness.toFixed(1).padStart(8)} | ` +
-      `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
-      `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
-      `${genMs}ms | ${elapsed}s/${remain}s left`
+        `top: ${topFitness.toFixed(1).padStart(8)} | ` +
+        `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
+        `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
+        `${genMs}ms | ${elapsed}s/${remain}s left`,
     );
   }
 
@@ -312,8 +342,15 @@ while (performance.now() - t0 < timeLimitMs) {
       fitness: globalBestFitness,
       genome: globalBestGenome,
       generation: gen,
-      scenario: '3v3-focusfire',
-      config: { POP_SIZE, OPPONENTS_PER_EVAL, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
+      scenario: "3v3-focusfire",
+      config: {
+        POP_SIZE,
+        OPPONENTS_PER_EVAL,
+        MUTATION_RATE,
+        MUTATION_STRENGTH,
+        ARENA_RADIUS,
+        MATCH_FRAMES,
+      },
       trainedAt: new Date().toISOString(),
     };
     Deno.writeTextFileSync(OUTPUT_FILE, JSON.stringify(checkpoint, null, 2));
@@ -327,8 +364,15 @@ if (globalBestGenome) {
     fitness: globalBestFitness,
     genome: globalBestGenome,
     generation: gen,
-    scenario: '3v3-focusfire',
-    config: { POP_SIZE, OPPONENTS_PER_EVAL, MUTATION_RATE, MUTATION_STRENGTH, ARENA_RADIUS, MATCH_FRAMES },
+    scenario: "3v3-focusfire",
+    config: {
+      POP_SIZE,
+      OPPONENTS_PER_EVAL,
+      MUTATION_RATE,
+      MUTATION_STRENGTH,
+      ARENA_RADIUS,
+      MATCH_FRAMES,
+    },
     trainedAt: new Date().toISOString(),
   };
   Deno.writeTextFileSync(OUTPUT_FILE, JSON.stringify(final, null, 2));

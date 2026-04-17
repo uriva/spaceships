@@ -2,7 +2,8 @@ import { GoogleGenAI } from "npm:@google/genai";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 
-const DSL_SYSTEM_PROMPT = `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands. NEVER ask clarifying questions - use sensible defaults instead.
+const DSL_SYSTEM_PROMPT =
+  `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands. NEVER ask clarifying questions - use sensible defaults instead.
 
 Each message includes a [CONTEXT] block with:
 - Currently selected ships/objects (use these when user says "them", "those", "selected", "these ships")
@@ -130,7 +131,10 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
   if (!GEMINI_API_KEY) {
     return new Response(
       JSON.stringify({ error: "GEMINI_API_KEY not configured" }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      {
+        status: 500,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      },
     );
   }
 
@@ -141,7 +145,10 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
     if (!userMessage || typeof userMessage !== "string") {
       return new Response(
         JSON.stringify({ error: "Missing 'message' field" }),
-        { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+        {
+          status: 400,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -168,13 +175,17 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
         }
         if (!text) {
           try {
-            text = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+            text =
+              response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
           } catch (_) {
             // fallback
           }
         }
         if (!text) {
-          console.error("Empty response from Gemini. Full response:", JSON.stringify(response));
+          console.error(
+            "Empty response from Gemini. Full response:",
+            JSON.stringify(response),
+          );
           text = "MSG: Starfleet Computer is processing. Please try again.";
         }
 
@@ -185,21 +196,32 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       } catch (e) {
         lastError = e;
         console.error(`Gemini attempt ${attempt + 1} failed:`, e);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
       }
     }
 
     // All retries failed
     console.error("All Gemini retries failed:", lastError);
     return new Response(
-      JSON.stringify({ error: "Gemini API error after retries", details: String(lastError) }),
-      { status: 502, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      JSON.stringify({
+        error: "Gemini API error after retries",
+        details: String(lastError),
+      }),
+      {
+        status: 502,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      },
     );
   } catch (e) {
     console.error("Server error:", e);
     return new Response(
       JSON.stringify({ error: "Server error", details: String(e) }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      {
+        status: 500,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      },
     );
   }
 });

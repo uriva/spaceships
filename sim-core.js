@@ -908,13 +908,21 @@
   const _simpleBrainFwd = [0, 0, 0];
   const _simpleBrainTargetDir = [0, 0, 0];
 
-  function buildSimpleBrainInputs(ship, targetPos) {
+  function _simpleBrainTargetPos(targetStateOrPos) {
+    if (!targetStateOrPos) return null;
+    return Array.isArray(targetStateOrPos)
+      ? targetStateOrPos
+      : targetStateOrPos.pos;
+  }
+
+  function buildSimpleBrainInputs(ship, targetStateOrPos) {
     const inp = _simpleBrainInputs;
     inp.fill(0);
 
     Q.invertInto(ship.quat, _simpleBrainInvQ);
 
     // Target in local polar
+    const targetPos = _simpleBrainTargetPos(targetStateOrPos);
     if (targetPos) {
       const dx = targetPos[0] - ship.pos[0];
       const dy = targetPos[1] - ship.pos[1];
@@ -959,8 +967,9 @@
     return inp;
   }
 
-  function applySimpleBrainOutputs(ship, outputs, targetPos = null) {
+  function applySimpleBrainOutputs(ship, outputs, targetStateOrPos = null) {
     const hasFuel = ship.fuel > 0;
+    const targetPos = _simpleBrainTargetPos(targetStateOrPos);
 
     if (targetPos) {
       const dx = targetPos[0] - ship.pos[0];

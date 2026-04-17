@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write
-// train-brain.js — sep-CMA-ES trainer for simplified movement brain
-// Goal: navigate to a static point and stop there.
+// train-brain.js — sep-CMA-ES trainer for the shared navigation brain
+// Goal: train in stages without regressing earlier movement skills.
 // Network: [6, 3] linear + tanh output. 21 params.
 // Inputs: target az/el/dist + speed + vel direction
 // Outputs: face az/el + throttle
@@ -22,10 +22,30 @@ const {
 
 // ── Config ──
 const TOPOLOGY = [6, 3];
-const OUTPUT_FILE = Deno.args[0] || "brain.json";
-const RUN_MINUTES = parseFloat(Deno.args[1] || "60");
-const FRESH = Deno.args.includes("--fresh");
-const SEED_FILE = FRESH ? "__noseed__" : (Deno.args[2] || "brain.json");
+const FLAG_ARGS = Deno.args.filter((arg) => arg.startsWith("--"));
+const POSITIONAL_ARGS = Deno.args.filter((arg) => !arg.startsWith("--"));
+const FLAG_MAP = new Map(
+  FLAG_ARGS
+    .filter((arg) => arg.includes("="))
+    .map((arg) => {
+      const eq = arg.indexOf("=");
+      return [arg.slice(2, eq), arg.slice(eq + 1)];
+    }),
+);
+function getFlag(name, fallback) {
+  return FLAG_MAP.get(name) ?? fallback;
+}
+const OUTPUT_FILE = POSITIONAL_ARGS[0] || "brain.json";
+const RUN_MINUTES = parseFloat(POSITIONAL_ARGS[1] || "60");
+const FRESH = FLAG_ARGS.includes("--fresh");
+const SEED_FILE = FRESH ? "__noseed__" : (POSITIONAL_ARGS[2] || "brain.json");
+const STAGE = getFlag("stage", "hold");
+const FREEZE = new Set(
+  getFlag("freeze", "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
 const EVALS_PER_CANDIDATE = 8;
 const EPISODE_FRAMES = 3000; // 50 sec at 60fps
 
@@ -55,6 +75,76 @@ const cmu = Math.min(
 );
 const damps = 1 + 2 * Math.max(0, Math.sqrt((mueff - 1) / (N + 1)) - 1) + cs;
 const chiN = Math.sqrt(N) * (1 - 1 / (4 * N) + 1 / (21 * N * N));
+
+const STAGE_PRESETS = {
+  arrive: {
+    label: "Stage 1: Arrive",
+    scenario: "stage1-arrive",
+    scenarios: [
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+    ],
+  },
+  stop: {
+    label: "Stage 2: Arrive + Stop",
+    scenario: "stage2-stop",
+    scenarios: [
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "stop" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "stop" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "stop" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "stop" },
+    ],
+  },
+  hold: {
+    label: "Stage 3: Hold + Regression",
+    scenario: "stage3-hold",
+    scenarios: [
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "arrive" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "stop" },
+      { distRange: [10, 50], speedMul: 0.2, reward: "stop" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "stop" },
+      { distRange: [50, 200], speedMul: 0.2, reward: "stop" },
+      { distRange: [0, 3], speedMul: 0.5, reward: "hold" },
+      { distRange: [0, 1], speedMul: 0.3, reward: "hold" },
+    ],
+  },
+};
+
+const stagePreset = STAGE_PRESETS[STAGE];
+if (!stagePreset) {
+  throw new Error(
+    `Unknown stage '${STAGE}'. Use one of: ${
+      Object.keys(STAGE_PRESETS).join(", ")
+    }`,
+  );
+}
+
+const frozenMask = new Uint8Array(N);
+function freezeOutput(outputIdx) {
+  const base = outputIdx * TOPOLOGY[0];
+  for (let i = 0; i < TOPOLOGY[0]; i++) frozenMask[base + i] = 1;
+  frozenMask[TOPOLOGY[0] * TOPOLOGY[1] + outputIdx] = 1;
+}
+if (FREEZE.has("steering")) {
+  freezeOutput(0);
+  freezeOutput(1);
+}
+if (FREEZE.has("throttle")) freezeOutput(2);
+if (FREEZE.has("az") || FREEZE.has("azimuth")) freezeOutput(0);
+if (FREEZE.has("el") || FREEZE.has("elevation")) freezeOutput(1);
+
+const freezeLabel = FREEZE.size ? Array.from(FREEZE).join(",") : "none";
 
 // ══════════════════════════════════════════════════════════════
 // ██  Seeded PRNG (xoshiro128**)
@@ -146,6 +236,12 @@ function sampleCandidate() {
   const y = new Float64Array(N);
   const x = new Float64Array(N);
   for (let i = 0; i < N; i++) {
+    if (frozenMask[i]) {
+      z[i] = 0;
+      y[i] = 0;
+      x[i] = mean[i];
+      continue;
+    }
     const u1 = Math.random(), u2 = Math.random();
     z[i] = Math.sqrt(-2 * Math.log(u1 + 1e-30)) * Math.cos(2 * Math.PI * u2);
     y[i] = Math.sqrt(diagC[i]) * z[i];
@@ -168,22 +264,9 @@ function generateEpisodeConfigs(masterSeed) {
   const rng = makeRng(masterSeed);
   const configs = [];
 
-  // Stage 4: mix of "already here" + navigation scenarios
-  // 4 near/at-target (0-3 units, some with drift), 2 short-range, 2 long-range
-  const scenarios = [
-    // Near target: distance 0-3, higher initial velocity to test braking
-    { distRange: [0, 3], speedMul: 0.5 },
-    { distRange: [0, 3], speedMul: 0.5 },
-    { distRange: [0, 1], speedMul: 0.3 },
-    { distRange: [0, 1], speedMul: 0.1 },
-    // Navigation (must not regress)
-    { distRange: [10, 50], speedMul: 0.2 },
-    { distRange: [10, 50], speedMul: 0.2 },
-    { distRange: [50, 200], speedMul: 0.2 },
-    { distRange: [50, 200], speedMul: 0.2 },
-  ];
-
-  for (const { distRange: [lo, hi], speedMul } of scenarios) {
+  for (
+    const { distRange: [lo, hi], speedMul, reward } of stagePreset.scenarios
+  ) {
     const targetDist = lo + rng() * (hi - lo);
     const dir = rngDir(rng);
     const targetPos = [
@@ -197,7 +280,7 @@ function generateEpisodeConfigs(masterSeed) {
       shipQuat[0] ** 2 + shipQuat[1] ** 2 + shipQuat[2] ** 2 + shipQuat[3] ** 2,
     );
     for (let j = 0; j < 4; j++) shipQuat[j] /= ql;
-    // Initial velocity (higher for near-target to test braking)
+    // Initial velocity can be larger in hold scenarios to test braking/settling.
     const initSpeed = rng() * speedMul * PHYSICS.MAX_SPEED;
     const vDir = rngDir(rng);
     const shipVel = [
@@ -205,7 +288,12 @@ function generateEpisodeConfigs(masterSeed) {
       vDir[1] * initSpeed,
       vDir[2] * initSpeed,
     ];
-    configs.push({ targetPos, shipQuat, shipVel, nearTarget: lo < 5 });
+    configs.push({
+      targetState: { pos: targetPos, vel: [0, 0, 0], mode: reward },
+      shipQuat,
+      shipVel,
+      reward,
+    });
   }
   return configs;
 }
@@ -224,12 +312,13 @@ function runEpisode(brain, config) {
   ship.vel[1] = config.shipVel[1];
   ship.vel[2] = config.shipVel[2];
 
-  const targetPos = config.targetPos;
+  const targetState = config.targetState;
+  const targetPos = targetState.pos;
 
   for (let frame = 0; frame < EPISODE_FRAMES; frame++) {
-    const inputs = buildSimpleBrainInputs(ship, targetPos);
+    const inputs = buildSimpleBrainInputs(ship, targetState);
     const outputs = brain.forward(inputs);
-    applySimpleBrainOutputs(ship, outputs, targetPos);
+    applySimpleBrainOutputs(ship, outputs, targetState);
     shipSimStep(ship);
   }
 
@@ -238,16 +327,20 @@ function runEpisode(brain, config) {
   const finalDist = Math.max(0, rawDist - DEAD_ZONE);
   const finalSpeed = V3.length(ship.vel);
 
-  if (config.nearTarget) {
-    // Stage 4 near-target: pure fuel + staying still
-    // Max 100: fuel up to 70, stillness up to 30
+  if (config.reward === "hold") {
     const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 70;
     const stoppingBonus =
       Math.max(0, 1 - finalSpeed / (PHYSICS.MAX_SPEED * 0.1)) * 30;
     return fuelBonus + stoppingBonus;
   }
 
-  // Navigation episodes: arrive within dead zone AND stop efficiently
+  if (config.reward === "arrive") {
+    const proximityBonus = 120 / (1 + finalDist);
+    const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 20;
+    return proximityBonus + fuelBonus;
+  }
+
+  // Stop episodes: arrive within dead zone and stop efficiently.
   const proximityBonus = 100 / (1 + finalDist);
   const fuelBonus = (ship.fuel / PHYSICS.MAX_FUEL) * 50;
   const stoppingBonus = rawDist < 10
@@ -273,14 +366,16 @@ function evaluate(genome, episodeConfigs) {
 // ══════════════════════════════════════════════════════════════
 // ██  Training loop
 // ══════════════════════════════════════════════════════════════
-console.log("sep-CMA-ES Stage 4: Stay Still + Navigate");
+console.log(`sep-CMA-ES ${stagePreset.label}`);
 console.log(`Topology: ${TOPOLOGY.join("->")}, params: ${N}`);
 console.log(`Lambda: ${LAMBDA}, mu: ${MU}, mueff: ${mueff.toFixed(1)}`);
 console.log(
   `Episodes/candidate: ${EVALS_PER_CANDIDATE}, frames/episode: ${EPISODE_FRAMES}`,
 );
+console.log(`Stage key: ${STAGE}`);
+console.log(`Frozen outputs: ${freezeLabel}`);
 console.log(
-  "Fitness: near-target fuel(70)+stillness(30), navigation proximity(100)+fuel(50)+stopping(30)",
+  "Fitness: arrive=proximity(120)+fuel(20), stop=proximity(100)+fuel(50)+stopping(30), hold=fuel(70)+stillness(30)",
 );
 console.log(`Running for ${RUN_MINUTES} minutes...\n`);
 
@@ -410,7 +505,9 @@ function saveCheckpoint(genNum) {
         fitness: globalBestFitness,
         genome: globalBestGenome,
         generation: genNum,
-        scenario: "stage4-stay-still",
+        scenario: stagePreset.scenario,
+        stage: STAGE,
+        frozen: Array.from(FREEZE),
         optimizer: { name: "sep-CMA-ES", lambda: LAMBDA, mu: MU, sigma, N },
         config: { EPISODE_FRAMES, EVALS_PER_CANDIDATE },
         trainedAt: new Date().toISOString(),

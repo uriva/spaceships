@@ -5,65 +5,83 @@
 // Outputs: pitch, yaw, burn (3) — tanh output layer
 // Optimizer: sep-CMA-ES (diagonal covariance, O(N) per generation)
 
-const simCoreSrc = Deno.readTextFileSync(new URL('./sim-core.js', import.meta.url).pathname);
+const simCoreSrc = Deno.readTextFileSync(
+  new URL("./sim-core.js", import.meta.url).pathname,
+);
 (new Function(simCoreSrc))();
 const {
-  V3, Q, PHYSICS, ReLUNetwork,
-  createShipState, shipSimStep, applyNNOutputs,
+  V3,
+  Q,
+  PHYSICS,
+  ReLUNetwork,
+  createShipState,
+  shipSimStep,
+  applyNNOutputs,
 } = globalThis.SimCore;
 
 // ── Config ──
 const TOPOLOGY = [6, 16, 16, 3];
-const OUTPUT_FILE = Deno.args[0] || 'follow-brain.json';
-const MATCH_FRAMES = 600;          // 10 sec at 60fps
-const EVALS_PER_CANDIDATE = 16;   // average over diverse scenarios (8 structured + 8 random)
-const RUN_MINUTES = parseFloat(Deno.args[1] || '30');
-const SEED_FILE = Deno.args[2] || 'follow-brain.json'; // optional: seed from existing brain
+const OUTPUT_FILE = Deno.args[0] || "follow-brain.json";
+const MATCH_FRAMES = 600; // 10 sec at 60fps
+const EVALS_PER_CANDIDATE = 16; // average over diverse scenarios (8 structured + 8 random)
+const RUN_MINUTES = parseFloat(Deno.args[1] || "30");
+const SEED_FILE = Deno.args[2] || "follow-brain.json"; // optional: seed from existing brain
 
 // sep-CMA-ES hyperparameters
 const nn = new ReLUNetwork(TOPOLOGY);
-const N = nn.paramCount;  // dimensionality
+const N = nn.paramCount; // dimensionality
 const LAMBDA = Math.max(16, 4 + Math.floor(3 * Math.log(N))); // population size
-const MU = Math.floor(LAMBDA / 2);  // number of parents
+const MU = Math.floor(LAMBDA / 2); // number of parents
 
 // Recombination weights (log-linear, truncation selection)
 const rawWeights = [];
-for (let i = 0; i < MU; i++) rawWeights.push(Math.log(MU + 0.5) - Math.log(i + 1));
+for (let i = 0; i < MU; i++) {
+  rawWeights.push(Math.log(MU + 0.5) - Math.log(i + 1));
+}
 const wSum = rawWeights.reduce((a, b) => a + b, 0);
-const weights = rawWeights.map(w => w / wSum);
+const weights = rawWeights.map((w) => w / wSum);
 const mueff = 1.0 / weights.reduce((a, w) => a + w * w, 0);
 
 // Adaptation parameters (sep-CMA-ES: same formulas, diagonal only)
 const cc = (4 + mueff / N) / (N + 4 + 2 * mueff / N);
 const cs = (mueff + 2) / (N + mueff + 5);
 const c1 = 2 / ((N + 1.3) ** 2 + mueff);
-const cmu = Math.min(1 - c1, 2 * (mueff - 2 + 1 / mueff) / ((N + 2) ** 2 + mueff));
+const cmu = Math.min(
+  1 - c1,
+  2 * (mueff - 2 + 1 / mueff) / ((N + 2) ** 2 + mueff),
+);
 const damps = 1 + 2 * Math.max(0, Math.sqrt((mueff - 1) / (N + 1)) - 1) + cs;
 const chiN = Math.sqrt(N) * (1 - 1 / (4 * N) + 1 / (21 * N * N));
 
 // ══════════════════════════════════════════════════════════════
 // ██  sep-CMA-ES State (diagonal covariance)
 // ══════════════════════════════════════════════════════════════
-const mean = new Float64Array(N);       // distribution mean
-let sigma = 0.5;                        // step size (adjusted below if seeding)
-const pc = new Float64Array(N);         // evolution path (covariance)
-const ps = new Float64Array(N);         // evolution path (sigma)
-const diagC = new Float64Array(N);      // diagonal of covariance matrix
+const mean = new Float64Array(N); // distribution mean
+let sigma = 0.5; // step size (adjusted below if seeding)
+const pc = new Float64Array(N); // evolution path (covariance)
+const ps = new Float64Array(N); // evolution path (sigma)
+const diagC = new Float64Array(N); // diagonal of covariance matrix
 diagC.fill(1.0);
 
 // Initialize mean: seed from existing brain if available, else He init
 let seeded = false;
 try {
   const seedData = JSON.parse(Deno.readTextFileSync(SEED_FILE));
-  if (seedData.genome && seedData.genome.length === N &&
-      JSON.stringify(seedData.topology) === JSON.stringify(TOPOLOGY)) {
+  if (
+    seedData.genome && seedData.genome.length === N &&
+    JSON.stringify(seedData.topology) === JSON.stringify(TOPOLOGY)
+  ) {
     for (let i = 0; i < N; i++) mean[i] = seedData.genome[i];
     seeded = true;
     // Start with smaller sigma to refine around known-good solution
     sigma = seedData.optimizer?.sigma || 0.2;
     // But don't go too small — ensure exploration
     sigma = Math.max(sigma, 0.1);
-    console.log(`Seeded from ${SEED_FILE} (fitness ${seedData.fitness?.toFixed(1)}, gen ${seedData.generation}, σ=${sigma.toFixed(4)})`);
+    console.log(
+      `Seeded from ${SEED_FILE} (fitness ${
+        seedData.fitness?.toFixed(1)
+      }, gen ${seedData.generation}, σ=${sigma.toFixed(4)})`,
+    );
   }
 } catch (_) { /* no seed file or wrong format */ }
 
@@ -71,13 +89,13 @@ if (!seeded) {
   let idx = 0;
   for (let li = 0; li < TOPOLOGY.length - 1; li++) {
     const fanIn = TOPOLOGY[li];
-    const scale = Math.sqrt(2.0 / fanIn);  // He init for ReLU
+    const scale = Math.sqrt(2.0 / fanIn); // He init for ReLU
     const nW = TOPOLOGY[li] * TOPOLOGY[li + 1];
     for (let j = 0; j < nW; j++) mean[idx++] = (Math.random() * 2 - 1) * scale;
     const nB = TOPOLOGY[li + 1];
-    for (let j = 0; j < nB; j++) mean[idx++] = 0;  // zero biases
+    for (let j = 0; j < nB; j++) mean[idx++] = 0; // zero biases
   }
-  console.log('No seed found, using He initialization');
+  console.log("No seed found, using He initialization");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -128,31 +146,43 @@ const STRUCTURED_SCENARIOS = [
 ];
 
 function runFollowEpisode(brain, scenario) {
-  const ship = createShipState('alpha');
+  const ship = createShipState("alpha");
   ship.fuel = PHYSICS.MAX_FUEL;
 
   let targetPos;
   if (scenario) {
     // Structured scenario
     if (scenario.quat) {
-      ship.quat[0] = scenario.quat[0]; ship.quat[1] = scenario.quat[1];
-      ship.quat[2] = scenario.quat[2]; ship.quat[3] = scenario.quat[3];
+      ship.quat[0] = scenario.quat[0];
+      ship.quat[1] = scenario.quat[1];
+      ship.quat[2] = scenario.quat[2];
+      ship.quat[3] = scenario.quat[3];
     } else {
       Q.setRandomMut(ship.quat);
     }
-    ship.vel[0] = scenario.vel[0]; ship.vel[1] = scenario.vel[1]; ship.vel[2] = scenario.vel[2];
+    ship.vel[0] = scenario.vel[0];
+    ship.vel[1] = scenario.vel[1];
+    ship.vel[2] = scenario.vel[2];
     targetPos = [scenario.target[0], scenario.target[1], scenario.target[2]];
   } else {
     // Random scenario
     Q.setRandomMut(ship.quat);
     const initSpeed = Math.random() * 0.5 * PHYSICS.MAX_SPEED;
-    const vDir = V3.normalize([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
+    const vDir = V3.normalize([
+      Math.random() - 0.5,
+      Math.random() - 0.5,
+      Math.random() - 0.5,
+    ]);
     ship.vel[0] = vDir[0] * initSpeed;
     ship.vel[1] = vDir[1] * initSpeed;
     ship.vel[2] = vDir[2] * initSpeed;
 
     // Target at random distance 3-50 units, any direction
-    const tDir = V3.normalize([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
+    const tDir = V3.normalize([
+      Math.random() - 0.5,
+      Math.random() - 0.5,
+      Math.random() - 0.5,
+    ]);
     const tDist = 3 + Math.random() * 47;
     targetPos = [tDir[0] * tDist, tDir[1] * tDist, tDir[2] * tDist];
   }
@@ -237,10 +267,14 @@ function evaluate(genome) {
 // ══════════════════════════════════════════════════════════════
 // ██  sep-CMA-ES Training Loop
 // ══════════════════════════════════════════════════════════════
-console.log('sep-CMA-ES Follow Trainer');
-console.log(`Topology: ${TOPOLOGY.join('→')}, params: ${N}`);
+console.log("sep-CMA-ES Follow Trainer");
+console.log(`Topology: ${TOPOLOGY.join("→")}, params: ${N}`);
 console.log(`Lambda: ${LAMBDA}, mu: ${MU}, mueff: ${mueff.toFixed(1)}`);
-console.log(`Evals/candidate: ${EVALS_PER_CANDIDATE} (${STRUCTURED_SCENARIOS.length} structured + ${EVALS_PER_CANDIDATE - STRUCTURED_SCENARIOS.length} random)`);
+console.log(
+  `Evals/candidate: ${EVALS_PER_CANDIDATE} (${STRUCTURED_SCENARIOS.length} structured + ${
+    EVALS_PER_CANDIDATE - STRUCTURED_SCENARIOS.length
+  } random)`,
+);
 console.log(`Running for ${RUN_MINUTES} minutes...\n`);
 
 const t0 = performance.now();
@@ -300,11 +334,15 @@ while (performance.now() - t0 < timeLimitMs) {
   let psNormSq = 0;
   for (let i = 0; i < N; i++) psNormSq += ps[i] * ps[i];
   const psNorm = Math.sqrt(psNormSq);
-  const hsig = psNorm / Math.sqrt(1 - (1 - cs) ** (2 * (gen + 1))) / chiN < 1.4 + 2 / (N + 1) ? 1 : 0;
+  const hsig = psNorm / Math.sqrt(1 - (1 - cs) ** (2 * (gen + 1))) / chiN <
+      1.4 + 2 / (N + 1)
+    ? 1
+    : 0;
 
   // pc update
   for (let i = 0; i < N; i++) {
-    pc[i] = (1 - cc) * pc[i] + hsig * Math.sqrt(cc * (2 - cc) * mueff) * meanDiff[i];
+    pc[i] = (1 - cc) * pc[i] +
+      hsig * Math.sqrt(cc * (2 - cc) * mueff) * meanDiff[i];
   }
 
   // ── Update diagonal covariance ──
@@ -327,16 +365,17 @@ while (performance.now() - t0 < timeLimitMs) {
   // ── Logging ──
   const genMs = (performance.now() - genStart).toFixed(0);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(0);
-  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000).toFixed(0);
+  const remain = Math.max(0, (timeLimitMs - (performance.now() - t0)) / 1000)
+    .toFixed(0);
 
   if (gen % 10 === 0 || gen <= 5) {
     console.log(
       `GEN ${String(gen).padStart(4)} | ` +
-      `top: ${topFitness.toFixed(1).padStart(8)} | ` +
-      `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
-      `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
-      `σ: ${sigma.toFixed(4)} | ` +
-      `${genMs}ms | ${elapsed}s/${remain}s`
+        `top: ${topFitness.toFixed(1).padStart(8)} | ` +
+        `avg: ${avgFitness.toFixed(1).padStart(8)} | ` +
+        `best: ${globalBestFitness.toFixed(1).padStart(8)} | ` +
+        `σ: ${sigma.toFixed(4)} | ` +
+        `${genMs}ms | ${elapsed}s/${remain}s`,
     );
   }
 
@@ -349,13 +388,13 @@ while (performance.now() - t0 < timeLimitMs) {
 function saveCheckpoint(genNum) {
   const checkpoint = {
     topology: TOPOLOGY,
-    activation: 'relu+tanh',
+    activation: "relu+tanh",
     fitness: globalBestFitness,
     genome: globalBestGenome,
     generation: genNum,
-    scenario: 'follow-cmaes',
+    scenario: "follow-cmaes",
     optimizer: {
-      name: 'sep-CMA-ES',
+      name: "sep-CMA-ES",
       lambda: LAMBDA,
       mu: MU,
       sigma,
