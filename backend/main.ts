@@ -1,7 +1,5 @@
 import { GoogleGenAI } from "npm:@google/genai";
 
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
-
 const DSL_SYSTEM_PROMPT =
   `You are the Starfleet Computer aboard a space fleet command vessel. You translate natural language orders into DSL commands. NEVER ask clarifying questions - use sensible defaults instead.
 
@@ -114,9 +112,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
-Deno.serve({ port: 8000 }, async (req: Request) => {
+export const handler = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
@@ -128,7 +124,8 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
     });
   }
 
-  if (!GEMINI_API_KEY) {
+  const apiKey = Deno.env.get("GEMINI_API_KEY") || "";
+  if (!apiKey) {
     return new Response(
       JSON.stringify({ error: "GEMINI_API_KEY not configured" }),
       {
@@ -137,6 +134,7 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       },
     );
   }
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const body = await req.json();
@@ -224,4 +222,8 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       },
     );
   }
-});
+};
+
+if (import.meta.main) {
+  Deno.serve({ port: 8000 }, handler);
+}
